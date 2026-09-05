@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "author": "MAHARITSE Hyacinthe Bertand <maharitse@gmail.com> (+261 38 34 092 61)",
+  "author": "MAHARITSE Hyacinthe Bertrand <maharitse@gmail.com> (+261 38 34 092 61)",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",

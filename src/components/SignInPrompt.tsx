@@ -149,7 +149,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
       <div className="relative z-10 mt-5 flex flex-col items-center gap-1 text-center">
         <p className="text-[11px] font-mono text-slate-500">
           Conçu et développé par{' '}
-          <span className="font-semibold text-slate-300">MAHARITSE Hyacinthe Bertand</span>
+          <span className="font-semibold text-slate-300">MAHARITSE Hyacinthe Bertrand</span>
         </p>
         <div className="flex items-center gap-3 text-[10px] font-mono">
           <a

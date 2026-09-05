@@ -58,12 +58,12 @@ npm run lint    # Vérification TypeScript
 
 | | |
 |---|---|
-| **Nom** | MAHARITSE Hyacinthe Bertand |
+| **Nom** | MAHARITSE Hyacinthe Bertrand |
 | **Email** | [maharitse@gmail.com](mailto:maharitse@gmail.com) |
 | **Téléphone** | [+261 38 34 092 61](tel:+261383409261) |
 
 ---
 
 <div align="center">
-<sub>GMAIL-PRO — © MAHARITSE Hyacinthe Bertand</sub>
+<sub>GMAIL-PRO — © MAHARITSE Hyacinthe Bertrand</sub>
 </div>
