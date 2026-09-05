@@ -86,7 +86,8 @@ export const getAuthErrorMessage = (error: any): string => {
     return 'Problème de connexion réseau. Veuillez vérifier votre connexion Internet et réessayer.';
   }
   if (code === 'auth/unauthorized-domain') {
-    return 'Ce domaine n\'est pas autorisé dans la configuration Firebase Auth.';
+    const host = typeof window !== 'undefined' ? window.location.hostname : 'ce domaine';
+    return `Domaine non autorisé : « ${host} » n'est pas dans la liste des domaines autorisés du projet Firebase. Ajoutez-le dans Firebase Console → Authentication → Paramètres → Domaines autorisés.`;
   }
 
   const cleaned = message.replace(/^Firebase:\s*Error\s*\((.*?)\)\.?$/i, '$1').trim();

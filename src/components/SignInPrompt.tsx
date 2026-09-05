@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Mail, ShieldCheck, Inbox, Search, Sparkles, ExternalLink, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Mail, ShieldCheck, Inbox, Search, Sparkles, ExternalLink, AlertCircle, ChevronDown, ChevronUp, Copy, Check, Globe } from 'lucide-react';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 interface SignInPromptProps {
   onSignIn: () => void;
@@ -9,6 +10,22 @@ interface SignInPromptProps {
 
 export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading, error }) => {
   const [showHelpDetails, setShowHelpDetails] = useState(false);
+  const [domainCopied, setDomainCopied] = useState(false);
+
+  const isDomainError = !!error && error.startsWith('Domaine non autorisé');
+  const currentDomain = typeof window !== 'undefined' ? window.location.hostname : '';
+  const firebaseSettingsUrl = `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`;
+  const gcpCredentialsUrl = `https://console.cloud.google.com/apis/credentials?project=${firebaseConfig.projectId}`;
+
+  const copyDomain = async () => {
+    try {
+      await navigator.clipboard.writeText(currentDomain);
+      setDomainCopied(true);
+      setTimeout(() => setDomainCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
 
   return (
     <div
@@ -52,6 +69,72 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
                 </p>
               </div>
             </div>
+
+            {/* Aide spécifique : domaine non autorisé Firebase Auth */}
+            {isDomainError && currentDomain && (
+              <div className="mt-3 rounded-lg bg-slate-900/70 border border-slate-700/60 p-3 space-y-2.5">
+                <div className="flex items-center gap-2 text-[11px] text-slate-300">
+                  <Globe className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                  <span>Domaine actuel à autoriser :</span>
+                  <code className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 font-mono text-[11px] break-all">
+                    {currentDomain}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={copyDomain}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10 transition shrink-0"
+                    title="Copier le domaine"
+                  >
+                    {domainCopied ? (
+                      <>
+                        <Check className="h-3 w-3" /> Copié
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3 w-3" /> Copier
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300 leading-relaxed">
+                  <li>
+                    Ouvrez{' '}
+                    <a
+                      href={firebaseSettingsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-1"
+                    >
+                      Firebase Console → Authentication → Domaines autorisés
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </li>
+                  <li>Cliquez sur « Ajouter un domaine » et collez le domaine ci-dessus.</li>
+                  <li>
+                    (Recommandé) Ajoutez aussi l'origine{' '}
+                    <code className="text-cyan-300">{typeof window !== 'undefined' ? window.location.origin : ''}</code>{' '}
+                    dans{' '}
+                    <a
+                      href={gcpCredentialsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-1"
+                    >
+                      Google Cloud → Identifiants → Origines JavaScript
+                      <ExternalLink className="h-3 w-3" />
+                    </a>{' '}
+                    du client OAuth.
+                  </li>
+                  <li>Revenez ici et cliquez à nouveau sur « S'authentifier avec Google ».</li>
+                </ol>
+
+                <p className="text-[10px] text-slate-500 border-t border-slate-800 pt-2">
+                  Astuce : en développement local (http://localhost:3000), la connexion fonctionne
+                  sans configuration — localhost est toujours autorisé par défaut.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
