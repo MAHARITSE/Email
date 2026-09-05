@@ -1,0 +1,6 @@
+{
+  "name": "Gmail",
+  "description": "Application web Gmail moderne avec extracteur de pièces jointes, recherche avancée, aperçu et téléchargement groupé ZIP.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

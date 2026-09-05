@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gmail &amp; Extracteur de Pièces Jointes</title>
+    <meta name="description" content="Application web Gmail moderne avec extracteur de pièces jointes, recherche avancée, aperçu et téléchargement groupé ZIP." />
+    <meta property="og:title" content="Gmail &amp; Extracteur de Pièces Jointes" />
+    <meta property="og:description" content="Application web Gmail moderne avec extracteur de pièces jointes, recherche avancée, aperçu et téléchargement groupé ZIP." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script>
+      // Compatibility shim for environments where window.fetch has only a getter
+      // Prevents "Uncaught TypeError: Cannot set property fetch of #<Window> which has only a getter"
+      (function() {
+        try {
+          var originalFetch = window.fetch;
+          if (typeof originalFetch === 'function') {
+            var currentFetch = originalFetch;
+            var desc = Object.getOwnPropertyDescriptor(window, 'fetch');
+            if (!desc || !desc.set) {
+              Object.defineProperty(window, 'fetch', {
+                get: function() {
+                  return currentFetch;
+                },
+                set: function(newFetch) {
+                  currentFetch = newFetch;
+                },
+                configurable: true,
+                enumerable: true,
+              });
+            }
+          }
+        } catch (e) {
+          // Gracefully fallback if property is non-configurable
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
