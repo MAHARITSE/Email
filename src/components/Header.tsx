@@ -67,7 +67,7 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
           <span className={`text-base sm:text-lg font-bold tracking-widest uppercase font-mono ${isDark ? 'text-white' : 'text-slate-900'}`}>
-            Gmail<span className="text-cyan-500">-Net</span>
+            Gmail<span className="text-cyan-500">-Pro</span>
           </span>
         </div>
 

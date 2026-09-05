@@ -29,7 +29,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] animate-pulse"></span>
               <h1 className="text-base sm:text-lg font-bold font-mono tracking-tight text-white uppercase">
-                GMAIL-NET // NODE
+                GMAIL-PRO // NODE
               </h1>
             </div>
             <p className="text-[11px] text-slate-400 font-mono line-clamp-1">
