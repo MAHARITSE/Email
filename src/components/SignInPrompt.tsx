@@ -144,6 +144,30 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
           OAuth 2.0 direct. Les jetons restent en mémoire locale.
         </p>
       </div>
+
+      {/* Crédit créateur */}
+      <div className="relative z-10 mt-5 flex flex-col items-center gap-1 text-center">
+        <p className="text-[11px] font-mono text-slate-500">
+          Conçu et développé par{' '}
+          <span className="font-semibold text-slate-300">MAHARITSE Hyacinthe Bertand</span>
+        </p>
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <a
+            href="mailto:maharitse@gmail.com"
+            className="inline-flex items-center gap-1 text-cyan-400/80 hover:text-cyan-300 transition"
+          >
+            <Mail className="h-3 w-3" />
+            maharitse@gmail.com
+          </a>
+          <span className="text-slate-600">•</span>
+          <a
+            href="tel:+261383409261"
+            className="text-cyan-400/80 hover:text-cyan-300 transition"
+          >
+            +261 38 34 092 61
+          </a>
+        </div>
+      </div>
     </div>
   );
 };
