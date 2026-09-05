@@ -135,6 +135,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewArrayBuffer, setPreviewArrayBuffer] = useState<ArrayBuffer | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState<boolean>(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   // Auto-suggest contacts when typing sender
   const handleSenderChange = (val: string) => {
@@ -209,6 +210,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
     setIsLoadingPreview(true);
     setPreviewArrayBuffer(null);
     setPreviewBlobUrl(null);
+    setPreviewError(null);
 
     try {
       const bytes = await getAttachmentBytes(token, att.messageId, att.attachmentId, att.data);
@@ -220,6 +222,9 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
       setPreviewBlobUrl(url);
     } catch (e: any) {
       console.warn('Could not load preview bytes:', e);
+      setPreviewError(
+        e?.message || 'Impossible de récupérer cette pièce jointe depuis Gmail. Vérifiez votre connexion puis réessayez.'
+      );
     } finally {
       setIsLoadingPreview(false);
     }
@@ -232,6 +237,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
     setPreviewBlobUrl(null);
     setPreviewArrayBuffer(null);
     setPreviewAttachment(null);
+    setPreviewError(null);
   };
 
   // Handle batch ZIP download
@@ -876,6 +882,8 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
         blobUrl={previewBlobUrl}
         arrayBuffer={previewArrayBuffer}
         isLoading={isLoadingPreview}
+        loadError={previewError}
+        onRetry={handleOpenPreview}
         onClose={closePreview}
         onDownload={handleDownload}
       />

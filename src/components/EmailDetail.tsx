@@ -73,6 +73,7 @@ import {
   formatSignatureText,
   formatSignatureHtml,
 } from '../services/signatureService';
+import { detectFileKind, isPreviewableAttachment } from '../utils/fileKind';
 
 interface EmailDetailProps {
   email: ParsedEmail;
@@ -137,6 +138,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewArrayBuffer, setPreviewArrayBuffer] = useState<ArrayBuffer | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   // Resolved CID inline image map (contentId/filename -> blobUrl or dataUrl)
   const [cidMap, setCidMap] = useState<Record<string, string>>({});
@@ -337,9 +339,17 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
 
   // Preview Attachment Handler
   const handlePreviewAttachment = async (att: EmailAttachment) => {
-    if (!token) return;
     setIsLoadingPreview(true);
     setPreviewAttachment(att);
+    setPreviewError(null);
+
+    if (!token) {
+      setIsLoadingPreview(false);
+      setPreviewError(
+        'Session expirée ou jeton d\'accès manquant. Reconnectez-vous pour prévisualiser les pièces jointes.'
+      );
+      return;
+    }
 
     try {
       const bytes = await getAttachmentBytes(token, att.messageId, att.attachmentId);
@@ -352,8 +362,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       const blob = new Blob([arrayBuffer], { type: att.mimeType || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       setPreviewBlobUrl(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Erreur chargement aperçu:', err);
+      setPreviewError(
+        err?.message || 'Impossible de récupérer cette pièce jointe depuis Gmail. Vérifiez votre connexion puis réessayez.'
+      );
     } finally {
       setIsLoadingPreview(false);
     }
@@ -367,6 +380,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     setPreviewBlobUrl(null);
     setPreviewArrayBuffer(null);
     setIsLoadingPreview(false);
+    setPreviewError(null);
   };
 
   // Single Attachment Download
@@ -1287,18 +1301,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         {msg.attachments.map((att) => {
                           const isDownloading = downloadingAttId === att.id;
+                          const kind = detectFileKind(att.filename, att.mimeType);
                           const mime = att.mimeType.toLowerCase();
                           const imgKey = att.contentId || att.filename || att.id;
                           const resolvedImgUrl = cidMap[imgKey] || cidMap[imgKey.replace(/^<|>$/g, '')] || (att.data ? `data:${att.mimeType};base64,${att.data.replace(/-/g, '+').replace(/_/g, '/')}` : null);
-                          const isDoc =
-                            mime.includes('pdf') ||
-                            mime.includes('word') ||
-                            mime.includes('officedocument') ||
-                            mime.includes('excel') ||
-                            mime.includes('sheet') ||
-                            mime.includes('image') ||
-                            mime.includes('text') ||
-                            mime.includes('csv');
+                          const isDoc = isPreviewableAttachment(att);
 
                           return (
                             <div
@@ -1320,12 +1327,14 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                                   />
                                 ) : (
                                   <div className="p-2 rounded-lg bg-slate-500/10 text-cyan-400 shrink-0">
-                                    {mime.includes('pdf') ? (
-                                      <FileText className="h-4 w-4" />
-                                    ) : mime.includes('sheet') || mime.includes('excel') ? (
+                                    {kind === 'pdf' ? (
+                                      <FileText className="h-4 w-4 text-red-400" />
+                                    ) : kind === 'excel' ? (
                                       <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
-                                    ) : mime.includes('image') ? (
+                                    ) : kind === 'image' ? (
                                       <ImageIcon className="h-4 w-4 text-amber-400" />
+                                    ) : kind === 'word' ? (
+                                      <FileText className="h-4 w-4 text-blue-400" />
                                     ) : (
                                       <File className="h-4 w-4 text-slate-400" />
                                     )}
@@ -1651,8 +1660,10 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
         blobUrl={previewBlobUrl}
         arrayBuffer={previewArrayBuffer}
         isLoading={isLoadingPreview}
+        loadError={previewError}
         onClose={closePreview}
         onDownload={handleDownloadSingle}
+        onRetry={handlePreviewAttachment}
       />
     </div>
   );

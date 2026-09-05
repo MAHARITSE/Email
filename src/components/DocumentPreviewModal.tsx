@@ -14,19 +14,35 @@ import {
   Maximize2,
   Minimize2,
   Table,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
-import mammoth from 'mammoth';
+import type * as XLSXType from 'xlsx';
+import type mammothDefault from 'mammoth';
+import DOMPurify from 'dompurify';
 import { EmailAttachment } from '../types/gmail';
 import { useTheme } from '../context/ThemeContext';
+import { detectFileKind, getFileExtension, FileKind } from '../utils/fileKind';
+
+// Chargement paresseux : pdf.js, xlsx et mammoth ne sont téléchargés
+// que lorsqu'un aperçu de document est réellement ouvert.
+const PdfViewer = React.lazy(() =>
+  import('./PdfViewer').then((m) => ({ default: m.PdfViewer }))
+);
+const loadXLSX = () => import('xlsx') as Promise<typeof XLSXType>;
+const loadMammoth = () => import('mammoth') as Promise<typeof mammothDefault>;
 
 interface DocumentPreviewModalProps {
   attachment: EmailAttachment | null;
   blobUrl: string | null;
   arrayBuffer?: ArrayBuffer | null;
   isLoading: boolean;
+  /** Message d'erreur si le téléchargement des octets de la pièce jointe a échoué. */
+  loadError?: string | null;
   onClose: () => void;
   onDownload: (att: EmailAttachment) => void;
+  /** Relance le chargement de la pièce jointe après une erreur. */
+  onRetry?: (att: EmailAttachment) => void;
 }
 
 export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
@@ -34,8 +50,10 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
   blobUrl,
   arrayBuffer,
   isLoading,
+  loadError,
   onClose,
   onDownload,
+  onRetry,
 }) => {
   const { isDark } = useTheme();
 
@@ -59,27 +77,17 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
   const [parseError, setParseError] = useState<string | null>(null);
   const [isParsingDoc, setIsParsingDoc] = useState(false);
 
-  // Determine file type
+  // Determine file type (extension d'abord, puis mimeType)
   const filename = attachment?.filename || '';
-  const ext = filename.split('.').pop()?.toLowerCase() || '';
-  const mimeType = attachment?.mimeType || '';
+  const ext = getFileExtension(filename);
+  const kind: FileKind = detectFileKind(filename, attachment?.mimeType);
 
-  const isPdf = ext === 'pdf' || mimeType.includes('pdf');
-  const isImage =
-    ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext) ||
-    mimeType.startsWith('image/');
-  const isExcel =
-    ['xlsx', 'xls', 'csv', 'tsv', 'ods'].includes(ext) ||
-    mimeType.includes('spreadsheet') ||
-    mimeType.includes('excel') ||
-    mimeType.includes('csv');
-  const isWord =
-    ['docx', 'doc', 'dotx'].includes(ext) ||
-    mimeType.includes('wordprocessing') ||
-    mimeType.includes('msword');
-  const isText =
-    ['txt', 'json', 'md', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'py', 'sh', 'xml', 'log'].includes(ext) ||
-    mimeType.startsWith('text/');
+  const isPdf = kind === 'pdf';
+  const isImage = kind === 'image';
+  const isExcel = kind === 'excel';
+  const isWord = kind === 'word';
+  const isText = kind === 'text';
+  const isLegacyWord = isWord && ext !== 'docx'; // mammoth ne lit que le format .docx
 
   // Parse files when arrayBuffer changes
   useEffect(() => {
@@ -101,62 +109,87 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
 
     if (!arrayBuffer) return;
 
-    // 1. Handle Excel parsing
-    if (isExcel) {
-      setIsParsingDoc(true);
-      try {
-        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-        const parsedSheets = workbook.SheetNames.map((name) => {
-          const sheet = workbook.Sheets[name];
-          const rawData: (string | number)[][] = XLSX.utils.sheet_to_json(sheet, {
-            header: 1,
-            defval: '',
-          });
-          return { name, data: rawData };
-        });
-        setSheets(parsedSheets);
-        setActiveSheetIndex(0);
-      } catch (err: any) {
-        console.error('Erreur lecture Excel:', err);
-        setParseError('Impossible de formater ce classeur. Vous pouvez le télécharger pour le consulter.');
-      } finally {
-        setIsParsingDoc(false);
-      }
-    }
+    let cancelled = false;
 
-    // 2. Handle Word parsing (.docx)
-    else if (isWord && ext === 'docx') {
-      setIsParsingDoc(true);
-      mammoth
-        .convertToHtml({ arrayBuffer })
-        .then((result) => {
-          setWordHtml(result.value);
-        })
-        .catch((err: any) => {
-          console.error('Erreur lecture Word:', err);
-          // Fallback to raw text
-          mammoth
-            .extractRawText({ arrayBuffer })
-            .then((res) => setTextContent(res.value))
-            .catch(() => {
-              setParseError('Impossible d\'extraire l\'aperçu du document Word. Téléchargez-le pour l\'ouvrir.');
+    (async () => {
+      // 1. Handle Excel parsing (xlsx chargé à la demande)
+      if (isExcel) {
+        setIsParsingDoc(true);
+        try {
+          const XLSX = await loadXLSX();
+          if (cancelled) return;
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+          const parsedSheets = workbook.SheetNames.map((name) => {
+            const sheet = workbook.Sheets[name];
+            const rawData: (string | number)[][] = XLSX.utils.sheet_to_json(sheet, {
+              header: 1,
+              defval: '',
             });
-        })
-        .finally(() => {
-          setIsParsingDoc(false);
-        });
-    }
-
-    // 3. Handle Plain Text / Code
-    else if (isText || ext === 'csv' || ext === 'tsv') {
-      try {
-        const decoded = new TextDecoder('utf-8').decode(arrayBuffer);
-        setTextContent(decoded);
-      } catch {
-        // ignore
+            return { name, data: rawData };
+          });
+          if (cancelled) return;
+          setSheets(parsedSheets);
+          setActiveSheetIndex(0);
+        } catch (err: any) {
+          console.error('Erreur lecture Excel:', err);
+          if (!cancelled) setParseError('Impossible de formater ce classeur. Vous pouvez le télécharger pour le consulter.');
+        } finally {
+          if (!cancelled) setIsParsingDoc(false);
+        }
       }
-    }
-  }, [attachment, arrayBuffer, ext, isExcel, isWord, isText]);
+
+      // 2. Handle Word parsing (.docx uniquement — mammoth ne supporte pas le .doc legacy)
+      else if (isWord) {
+        if (!isLegacyWord) {
+          setIsParsingDoc(true);
+          try {
+            const mammoth = await loadMammoth();
+            if (cancelled) return;
+            try {
+              const result = await mammoth.convertToHtml({ arrayBuffer });
+              if (cancelled) return;
+              // Sécurisation du HTML produit (neutralise tout contenu actif malveillant)
+              setWordHtml(
+                DOMPurify.sanitize(result.value, {
+                  USE_PROFILES: { html: true },
+                  FORBID_TAGS: ['script', 'iframe', 'form', 'object', 'embed'],
+                })
+              );
+            } catch (err: any) {
+              console.error('Erreur lecture Word:', err);
+              // Fallback to raw text
+              const res = await mammoth.extractRawText({ arrayBuffer });
+              if (!cancelled) setTextContent(res.value);
+            }
+          } catch {
+            if (!cancelled) {
+              setParseError('Impossible d\'extraire l\'aperçu du document Word. Téléchargez-le pour l\'ouvrir.');
+            }
+          } finally {
+            if (!cancelled) setIsParsingDoc(false);
+          }
+        } else {
+          setParseError(
+            `Les anciens formats Word (${ext.toUpperCase()}) ne peuvent pas être affichés directement. Téléchargez le fichier pour l'ouvrir dans Word.`
+          );
+        }
+      }
+
+      // 3. Handle Plain Text / Code
+      else if (isText) {
+        try {
+          const decoded = new TextDecoder('utf-8').decode(arrayBuffer);
+          if (!cancelled) setTextContent(decoded);
+        } catch {
+          // ignore
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment, arrayBuffer, ext, isExcel, isWord, isLegacyWord, isText]);
 
   // Handle ESC key
   useEffect(() => {
@@ -344,7 +377,13 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
         )}
 
         {/* Modal Main Content */}
-        <div className="flex-1 overflow-auto p-2 sm:p-4 flex items-center justify-center relative select-text">
+        <div
+          className={`relative select-text ${
+            isPdf
+              ? 'flex-1 min-h-0 overflow-hidden p-0'
+              : 'flex-1 min-h-0 overflow-auto p-2 sm:p-4 flex items-center justify-center'
+          }`}
+        >
           {isLoading || isParsingDoc ? (
             <div className="flex flex-col items-center gap-3 text-center p-8">
               <Loader2 className="h-8 w-8 animate-spin text-cyan-400" />
@@ -363,49 +402,51 @@ export const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({
                 Télécharger le fichier original
               </button>
             </div>
-          ) : isPdf && blobUrl ? (
-            /* PDF Document Viewer with fallback */
-            <div className="w-full h-full flex flex-col relative">
-              <div className="absolute top-2 right-2 z-20 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700">
-                <span className="text-[11px] font-mono text-slate-300">Aperçu PDF sécurisé</span>
-                <a
-                  href={blobUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-2.5 py-1 text-xs font-semibold rounded bg-cyan-600 hover:bg-cyan-500 text-white transition"
+          ) : loadError ? (
+            /* Erreur de chargement des octets de la pièce jointe */
+            <div className="text-center max-w-md p-8">
+              <AlertTriangle className="h-12 w-12 text-red-400 mx-auto mb-3" />
+              <p className="text-sm font-semibold mb-1">Échec du chargement de l'aperçu</p>
+              <p className="text-xs text-slate-400 mb-4">{loadError}</p>
+              <div className="flex items-center justify-center gap-3">
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={() => onRetry(attachment)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Réessayer
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onDownload(attachment)}
+                  className="px-4 py-2 rounded-lg bg-slate-700 text-white text-xs font-semibold hover:bg-slate-600 transition"
                 >
-                  Ouvrir dans un nouvel onglet ↗
-                </a>
+                  Télécharger quand même
+                </button>
               </div>
-              <object
-                data={`${blobUrl}#toolbar=1&navpanes=0`}
-                type="application/pdf"
-                className="w-full h-full rounded-xl border-0 bg-slate-900"
-              >
-                <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center">
-                  <FileText className="h-12 w-12 text-red-400 mb-3" />
-                  <p className="text-sm font-semibold mb-2">L'aperçu PDF est restreint par le navigateur</p>
-                  <p className="text-xs text-slate-400 mb-4">Vous pouvez l'ouvrir directement dans un nouvel onglet ou le télécharger.</p>
-                  <div className="flex items-center gap-3">
-                    <a
-                      href={blobUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-xs font-semibold hover:bg-cyan-500 transition"
-                    >
-                      Ouvrir dans un nouvel onglet
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => onDownload(attachment)}
-                      className="px-4 py-2 rounded-lg bg-slate-700 text-white text-xs font-semibold hover:bg-slate-600 transition"
-                    >
-                      Télécharger
-                    </button>
-                  </div>
-                </div>
-              </object>
             </div>
+          ) : isPdf ? (
+            /* Lecteur PDF intégré (pdf.js) : rendu canvas directement dans l'application */
+            arrayBuffer || blobUrl ? (
+              <React.Suspense
+                fallback={
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-3">
+                    <Loader2 className="h-8 w-8 animate-spin text-cyan-400" />
+                    <p className="text-xs font-mono text-slate-400">Chargement du lecteur PDF…</p>
+                  </div>
+                }
+              >
+                <PdfViewer
+                  arrayBuffer={arrayBuffer}
+                  blobUrl={blobUrl}
+                  filename={attachment.filename}
+                  onDownload={() => onDownload(attachment)}
+                />
+              </React.Suspense>
+            ) : null
           ) : isExcel && sheets.length > 0 ? (
             /* Excel / Spreadsheet Grid Viewer */
             <div className="w-full h-full flex flex-col overflow-auto">
