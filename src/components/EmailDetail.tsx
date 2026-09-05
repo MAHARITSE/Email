@@ -528,6 +528,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       : `Re: ${targetMsg.subject}`;
 
     onRequestSendQuickReply({
+      fromEmail: currentUserEmail,
       to: toAddresses,
       cc: ccAddresses || undefined,
       bcc: bccAddresses || undefined,
@@ -664,7 +665,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               type="button"
               onClick={() => setShowCategoryMenu(!showCategoryMenu)}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold uppercase tracking-wider transition ${
-                isDark ? catInfo.badgeDark : catInfo.badgeLight
+                isDark ? catInfo.bgDark : catInfo.bgLight
               }`}
             >
               {effectiveCategory === 'pro' && <Briefcase className="h-3.5 w-3.5" />}
@@ -1475,7 +1476,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => onOpenReply(replyTargetEmail, replyMode)}
+                  onClick={() =>
+                    replyMode === 'forward'
+                      ? onOpenForward(replyTargetEmail)
+                      : onOpenReply(replyTargetEmail, replyMode)
+                  }
                   className="text-xs font-mono text-cyan-500 hover:underline"
                 >
                   Plein écran
