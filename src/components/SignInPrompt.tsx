@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
-import { Mail, ShieldCheck, Inbox, Search, Sparkles, ExternalLink, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Mail, ShieldCheck, Inbox, Search, Sparkles, ExternalLink, AlertCircle, ChevronDown, ChevronUp, Copy, Check, Globe } from 'lucide-react';
+import firebaseConfig from '../../firebase-applet-config.json';
+import { copyToClipboard, selectElementText } from '../utils/clipboard';
 
 interface SignInPromptProps {
   onSignIn: () => void;
@@ -9,6 +11,27 @@ interface SignInPromptProps {
 
 export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading, error }) => {
   const [showHelpDetails, setShowHelpDetails] = useState(false);
+  const [domainCopied, setDomainCopied] = useState(false);
+  const [copyBlocked, setCopyBlocked] = useState(false);
+  const domainCodeRef = useRef<HTMLElement | null>(null);
+
+  const isDomainError = !!error && error.startsWith('Domaine non autorisé');
+  const currentDomain = typeof window !== 'undefined' ? window.location.hostname : '';
+  const firebaseSettingsUrl = `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`;
+  const gcpCredentialsUrl = `https://console.cloud.google.com/apis/credentials?project=${firebaseConfig.projectId}`;
+
+  const copyDomain = async () => {
+    setCopyBlocked(false);
+    const ok = await copyToClipboard(currentDomain);
+    if (ok) {
+      setDomainCopied(true);
+      setTimeout(() => setDomainCopied(false), 2000);
+    } else {
+      // Copie automatique bloquée (iframe) : on sélectionne le domaine pour Ctrl+C
+      selectElementText(domainCodeRef.current);
+      setCopyBlocked(true);
+    }
+  };
 
   return (
     <div
@@ -29,7 +52,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] animate-pulse"></span>
               <h1 className="text-base sm:text-lg font-bold font-mono tracking-tight text-white uppercase">
-                GMAIL-NET // NODE
+                GMAIL-PRO // NODE
               </h1>
             </div>
             <p className="text-[11px] text-slate-400 font-mono line-clamp-1">
@@ -52,6 +75,86 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
                 </p>
               </div>
             </div>
+
+            {/* Aide spécifique : domaine non autorisé Firebase Auth */}
+            {isDomainError && currentDomain && (
+              <div className="mt-3 rounded-lg bg-slate-900/70 border border-slate-700/60 p-3 space-y-2.5">
+                <div className="flex items-center gap-2 text-[11px] text-slate-300">
+                  <Globe className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                  <span>Domaine actuel à autoriser :</span>
+                  <code
+                    ref={domainCodeRef}
+                    className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 font-mono text-[11px] break-all select-all cursor-text"
+                    title="Cliquez pour sélectionner le domaine"
+                    onClick={(e) => selectElementText(e.currentTarget)}
+                  >
+                    {currentDomain}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={copyDomain}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10 transition shrink-0"
+                    title="Copier le domaine"
+                  >
+                    {domainCopied ? (
+                      <>
+                        <Check className="h-3 w-3" /> Copié
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3 w-3" /> Copier
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {copyBlocked && (
+                  <p className="text-[10px] text-amber-300 flex items-center gap-1.5">
+                    <AlertCircle className="h-3 w-3 shrink-0" />
+                    Copie automatique bloquée par le navigateur : le domaine est sélectionné —
+                    faites <kbd className="px-1 py-0.5 rounded bg-slate-800 border border-slate-600 font-mono">Ctrl+C</kbd>
+                    (ou <kbd className="px-1 py-0.5 rounded bg-slate-800 border border-slate-600 font-mono">⌘C</kbd>) pour le copier.
+                  </p>
+                )}
+
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300 leading-relaxed">
+                  <li>
+                    Ouvrez{' '}
+                    <a
+                      href={firebaseSettingsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-1"
+                    >
+                      Firebase Console → Authentication → Domaines autorisés
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </li>
+                  <li>Cliquez sur « Ajouter un domaine » et collez le domaine ci-dessus.</li>
+                  <li>
+                    (Recommandé) Ajoutez aussi l'origine{' '}
+                    <code className="text-cyan-300">{typeof window !== 'undefined' ? window.location.origin : ''}</code>{' '}
+                    dans{' '}
+                    <a
+                      href={gcpCredentialsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 underline inline-flex items-center gap-1"
+                    >
+                      Google Cloud → Identifiants → Origines JavaScript
+                      <ExternalLink className="h-3 w-3" />
+                    </a>{' '}
+                    du client OAuth.
+                  </li>
+                  <li>Revenez ici et cliquez à nouveau sur « S'authentifier avec Google ».</li>
+                </ol>
+
+                <p className="text-[10px] text-slate-500 border-t border-slate-800 pt-2">
+                  Astuce : en développement local (http://localhost:3000), la connexion fonctionne
+                  sans configuration — localhost est toujours autorisé par défaut.
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -143,6 +246,30 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
         <p className="text-center text-[10px] font-mono text-slate-500 pt-1">
           OAuth 2.0 direct. Les jetons restent en mémoire locale.
         </p>
+      </div>
+
+      {/* Crédit créateur */}
+      <div className="relative z-10 mt-5 flex flex-col items-center gap-1 text-center">
+        <p className="text-[11px] font-mono text-slate-500">
+          Conçu et développé par{' '}
+          <span className="font-semibold text-slate-300">MAHARITSE Hyacinthe Bertrand</span>
+        </p>
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <a
+            href="mailto:maharitse@gmail.com"
+            className="inline-flex items-center gap-1 text-cyan-400/80 hover:text-cyan-300 transition"
+          >
+            <Mail className="h-3 w-3" />
+            maharitse@gmail.com
+          </a>
+          <span className="text-slate-600">•</span>
+          <a
+            href="tel:+261383409261"
+            className="text-cyan-400/80 hover:text-cyan-300 transition"
+          >
+            +261 38 34 092 61
+          </a>
+        </div>
       </div>
     </div>
   );

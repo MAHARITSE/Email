@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { ThemeProvider } from './context/ThemeContext.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 
 // Gracefully handle benign unhandled rejections and environment quirks
 window.addEventListener('unhandledrejection', (event) => {
@@ -26,10 +27,19 @@ window.addEventListener('error', (event) => {
   }
 });
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ThemeProvider>
-      <App />
-    </ThemeProvider>
-  </StrictMode>,
-);
+const rootEl = document.getElementById('root');
+
+if (!rootEl) {
+  document.body.innerHTML =
+    '<p style="font-family:sans-serif;padding:24px">Erreur : élément racine #root introuvable.</p>';
+} else {
+  createRoot(rootEl).render(
+    <StrictMode>
+      <ErrorBoundary>
+        <ThemeProvider>
+          <App />
+        </ThemeProvider>
+      </ErrorBoundary>
+    </StrictMode>,
+  );
+}
