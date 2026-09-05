@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Mail, ShieldCheck, Inbox, Search, Sparkles, ExternalLink, AlertCircle, ChevronDown, ChevronUp, Copy, Check, Globe } from 'lucide-react';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { copyToClipboard, selectElementText } from '../utils/clipboard';
 
 interface SignInPromptProps {
   onSignIn: () => void;
@@ -11,6 +12,8 @@ interface SignInPromptProps {
 export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading, error }) => {
   const [showHelpDetails, setShowHelpDetails] = useState(false);
   const [domainCopied, setDomainCopied] = useState(false);
+  const [copyBlocked, setCopyBlocked] = useState(false);
+  const domainCodeRef = useRef<HTMLElement | null>(null);
 
   const isDomainError = !!error && error.startsWith('Domaine non autorisé');
   const currentDomain = typeof window !== 'undefined' ? window.location.hostname : '';
@@ -18,12 +21,15 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
   const gcpCredentialsUrl = `https://console.cloud.google.com/apis/credentials?project=${firebaseConfig.projectId}`;
 
   const copyDomain = async () => {
-    try {
-      await navigator.clipboard.writeText(currentDomain);
+    setCopyBlocked(false);
+    const ok = await copyToClipboard(currentDomain);
+    if (ok) {
       setDomainCopied(true);
       setTimeout(() => setDomainCopied(false), 2000);
-    } catch {
-      // ignore
+    } else {
+      // Copie automatique bloquée (iframe) : on sélectionne le domaine pour Ctrl+C
+      selectElementText(domainCodeRef.current);
+      setCopyBlocked(true);
     }
   };
 
@@ -76,7 +82,12 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
                 <div className="flex items-center gap-2 text-[11px] text-slate-300">
                   <Globe className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
                   <span>Domaine actuel à autoriser :</span>
-                  <code className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 font-mono text-[11px] break-all">
+                  <code
+                    ref={domainCodeRef}
+                    className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 font-mono text-[11px] break-all select-all cursor-text"
+                    title="Cliquez pour sélectionner le domaine"
+                    onClick={(e) => selectElementText(e.currentTarget)}
+                  >
                     {currentDomain}
                   </code>
                   <button
@@ -96,6 +107,15 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
                     )}
                   </button>
                 </div>
+
+                {copyBlocked && (
+                  <p className="text-[10px] text-amber-300 flex items-center gap-1.5">
+                    <AlertCircle className="h-3 w-3 shrink-0" />
+                    Copie automatique bloquée par le navigateur : le domaine est sélectionné —
+                    faites <kbd className="px-1 py-0.5 rounded bg-slate-800 border border-slate-600 font-mono">Ctrl+C</kbd>
+                    (ou <kbd className="px-1 py-0.5 rounded bg-slate-800 border border-slate-600 font-mono">⌘C</kbd>) pour le copier.
+                  </p>
+                )}
 
                 <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300 leading-relaxed">
                   <li>
