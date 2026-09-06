@@ -47,12 +47,40 @@ body.light ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
 
-/* Ensure images inside email bodies render fully and adaptively */
+/* Ensure images inside email bodies render fully and adaptively without forced spacing */
 .prose img, .email-body-content img {
   max-width: 100% !important;
   height: auto !important;
-  border-radius: 8px;
+  border-radius: 4px;
   display: inline-block;
-  margin-top: 0.5rem;
+  vertical-align: middle;
+}
+
+/* Rich Text Email Editor Placeholder and Layout */
+.rich-email-content[contenteditable]:empty::before {
+  content: attr(data-placeholder);
+  color: #64748b;
+  opacity: 0.7;
+  pointer-events: none;
+  cursor: text;
+  display: block;
+}
+
+.rich-email-content ul {
+  list-style-type: disc;
+  margin-left: 1.5rem;
+  padding-left: 0.25rem;
+}
+
+.rich-email-content ol {
+  list-style-type: decimal;
+  margin-left: 1.5rem;
+  padding-left: 0.25rem;
+}
+
+.rich-email-content p {
   margin-bottom: 0.5rem;
+}
+.rich-email-content p:last-child {
+  margin-bottom: 0;
 }

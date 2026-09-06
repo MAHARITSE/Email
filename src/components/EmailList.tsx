@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Square,
   CheckSquare,
@@ -19,19 +19,38 @@ import {
   Check,
   MessageSquare,
   Users,
+  Send,
+  Layers,
 } from 'lucide-react';
 import { ParsedEmail } from '../types/gmail';
 import { useTheme } from '../context/ThemeContext';
 import { EmailCategory, CATEGORIES, classifyEmailFast } from '../services/emailClassifier';
+import { parseEmailAddressList, resolveContactDisplayName } from '../services/contactsService';
+
+function formatRecipientsSummary(recipients: Array<{ name: string; email: string }>): string {
+  if (!recipients || recipients.length === 0) return 'Destinataire inconnu';
+  const clean = recipients.filter((r) => r.name || r.email);
+  if (clean.length === 0) return 'Destinataire inconnu';
+  const getName = (r: { name: string; email: string }) => resolveContactDisplayName(r.email, r.name);
+  if (clean.length === 1) {
+    return getName(clean[0]);
+  }
+  if (clean.length === 2) {
+    return `${getName(clean[0])}, ${getName(clean[1])}`;
+  }
+  return `${getName(clean[0])}, ${getName(clean[1])} (+${clean.length - 2})`;
+}
 
 interface EmailListProps {
   emails: ParsedEmail[];
   isLoading: boolean;
   selectedLabelName: string;
+  selectedLabelId?: string;
+  currentUserEmail?: string;
   selectedCategory: EmailCategory;
   onSelectCategory: (cat: EmailCategory) => void;
-  emailCategories?: Record<string, 'pro' | 'personal' | 'sites'>;
-  onUpdateEmailCategory?: (emailId: string, cat: 'pro' | 'personal' | 'sites') => void;
+  emailCategories?: Record<string, 'pro' | 'personal' | 'sites' | 'other'>;
+  onUpdateEmailCategory?: (emailId: string, cat: 'pro' | 'personal' | 'sites' | 'other') => void;
   onSelectEmail: (email: ParsedEmail) => void;
   onRefresh: () => void;
   onToggleStar: (email: ParsedEmail, e: React.MouseEvent) => void;
@@ -44,6 +63,8 @@ interface EmailListProps {
   onPrevPage: () => void;
   onNextPage: () => void;
   pageIndex: number;
+  statusFilter?: 'all' | 'unread' | 'starred';
+  onStatusFilterChange?: (status: 'all' | 'unread' | 'starred') => void;
 }
 
 export interface ThreadGroup {
@@ -53,10 +74,12 @@ export interface ThreadGroup {
   latestEmail: ParsedEmail;
   subject: string;
   sendersSummary: string;
+  recipientSummary: string;
+  isSentThread: boolean;
   isUnread: boolean;
   isStarred: boolean;
   hasAttachments: boolean;
-  category: 'pro' | 'personal' | 'sites';
+  category: 'pro' | 'personal' | 'sites' | 'other';
   messageCount: number;
 }
 
@@ -64,6 +87,8 @@ export const EmailList: React.FC<EmailListProps> = ({
   emails,
   isLoading,
   selectedLabelName,
+  selectedLabelId,
+  currentUserEmail,
   selectedCategory,
   onSelectCategory,
   emailCategories = {},
@@ -80,14 +105,33 @@ export const EmailList: React.FC<EmailListProps> = ({
   onPrevPage,
   onNextPage,
   pageIndex,
+  statusFilter,
+  onStatusFilterChange,
 }) => {
   const { isDark } = useTheme();
+  const [contactsVersion, setContactsVersion] = useState(0);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [filterType, setFilterType] = useState<'all' | 'unread' | 'starred'>('all');
   const [activeCategoryMenuId, setActiveCategoryMenuId] = useState<string | null>(null);
 
+  const currentFilter = statusFilter !== undefined ? statusFilter : filterType;
+
+  const handleFilterClick = (newType: 'all' | 'unread' | 'starred') => {
+    setFilterType(newType);
+    if (onStatusFilterChange) {
+      onStatusFilterChange(newType);
+    }
+  };
+
+  // Re-render when local contacts are modified/added
+  useEffect(() => {
+    const handleContactsUpdated = () => setContactsVersion((v) => v + 1);
+    window.addEventListener('gmail-contacts-updated', handleContactsUpdated);
+    return () => window.removeEventListener('gmail-contacts-updated', handleContactsUpdated);
+  }, []);
+
   // Helper to get effective category for an email
-  const getCategory = (email: ParsedEmail): 'pro' | 'personal' | 'sites' => {
+  const getCategory = (email: ParsedEmail): 'pro' | 'personal' | 'sites' | 'other' => {
     return emailCategories[email.id] || classifyEmailFast(email);
   };
 
@@ -111,15 +155,78 @@ export const EmailList: React.FC<EmailListProps> = ({
       const isStarred = sorted.some((m) => m.isStarred);
       const hasAttachments = sorted.some((m) => m.attachments && m.attachments.length > 0);
 
-      // Unique senders summary
+      // Check if thread is in Sent folder or sent by current user
+      const isExplicitSentFolder =
+        selectedLabelId === 'SENT' ||
+        Boolean(selectedLabelName && selectedLabelName.toLowerCase().includes('envoyé'));
+
+      const userEmailClean = currentUserEmail?.toLowerCase().trim();
+      const allSentByUser = Boolean(
+        userEmailClean &&
+          sorted.every(
+            (m) =>
+              m.fromEmail?.toLowerCase().trim() === userEmailClean ||
+              m.labelIds?.includes('SENT') ||
+              m.fromName?.toLowerCase() === 'moi'
+          )
+      );
+
+      const isSentThread =
+        isExplicitSentFolder ||
+        (sorted.length > 0 && sorted.every((m) => m.labelIds?.includes('SENT'))) ||
+        (sorted.some((m) => m.labelIds?.includes('SENT')) && allSentByUser);
+
+      // Unique senders summary (used for received messages), verified with contact book
       const senders: string[] = [];
       sorted.forEach((m) => {
-        const name = m.fromName || m.fromEmail.split('@')[0];
+        const isMe =
+          userEmailClean &&
+          (m.fromEmail?.toLowerCase().trim() === userEmailClean || m.fromName?.toLowerCase() === 'moi');
+        const resolvedName = resolveContactDisplayName(m.fromEmail, m.fromName);
+        const name = isMe ? 'moi' : (resolvedName || m.fromEmail.split('@')[0]);
         if (!senders.includes(name)) {
           senders.push(name);
         }
       });
       const sendersSummary = senders.join(', ');
+
+      // Recipients summary (prominently used for sent messages), verified with contact book
+      const allRecipients: Array<{ name: string; email: string }> = [];
+      const seenEmails = new Set<string>();
+
+      sorted.forEach((m) => {
+        const list = parseEmailAddressList(m.to);
+        list.forEach((r) => {
+          const emailLower = r.email.toLowerCase();
+          if (emailLower && !seenEmails.has(emailLower) && emailLower !== userEmailClean) {
+            seenEmails.add(emailLower);
+            const resolvedName = resolveContactDisplayName(r.email, r.name);
+            allRecipients.push({ name: resolvedName, email: r.email });
+          }
+        });
+      });
+
+      // Fallback if all recipients were filtered or empty
+      if (allRecipients.length === 0) {
+        sorted.forEach((m) => {
+          const list = parseEmailAddressList(m.to);
+          list.forEach((r) => {
+            const emailLower = r.email.toLowerCase();
+            if (emailLower && !seenEmails.has(emailLower)) {
+              seenEmails.add(emailLower);
+              const resolvedName = resolveContactDisplayName(r.email, r.name);
+              allRecipients.push({ name: resolvedName, email: r.email });
+            }
+          });
+        });
+      }
+
+      const recipientSummary =
+        allRecipients.length > 0
+          ? formatRecipientsSummary(allRecipients)
+          : latest.to
+          ? formatRecipientsSummary(parseEmailAddressList(latest.to))
+          : 'Destinataire inconnu';
 
       const category = getCategory(latest);
 
@@ -130,6 +237,8 @@ export const EmailList: React.FC<EmailListProps> = ({
         latestEmail: latest,
         subject: latest.subject || '(Sans objet)',
         sendersSummary,
+        recipientSummary,
+        isSentThread,
         isUnread,
         isStarred,
         hasAttachments,
@@ -141,11 +250,11 @@ export const EmailList: React.FC<EmailListProps> = ({
     return groups.sort(
       (a, b) => Number(b.latestEmail.internalDate) - Number(a.latestEmail.internalDate)
     );
-  }, [emails, emailCategories]);
+  }, [emails, emailCategories, selectedLabelId, selectedLabelName, currentUserEmail, contactsVersion]);
 
   // Counts for categories in thread list
   const categoryCounts = useMemo(() => {
-    const counts = { pro: 0, personal: 0, sites: 0 };
+    const counts = { pro: 0, personal: 0, sites: 0, other: 0 };
     threadGroups.forEach((t) => {
       if (counts[t.category] !== undefined) {
         counts[t.category]++;
@@ -156,8 +265,8 @@ export const EmailList: React.FC<EmailListProps> = ({
 
   // Filter threads by both read/starred filter AND selectedCategory
   const filteredThreads = threadGroups.filter((t) => {
-    if (filterType === 'unread' && !t.isUnread) return false;
-    if (filterType === 'starred' && !t.isStarred) return false;
+    if (currentFilter === 'unread' && !t.isUnread) return false;
+    if (currentFilter === 'starred' && !t.isStarred) return false;
 
     if (selectedCategory !== 'all') {
       if (t.category !== selectedCategory) return false;
@@ -320,6 +429,32 @@ export const EmailList: React.FC<EmailListProps> = ({
             {categoryCounts.sites}
           </span>
         </button>
+
+        {/* Other tab */}
+        <button
+          id="category-tab-other"
+          type="button"
+          onClick={() => onSelectCategory('other')}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+            selectedCategory === 'other'
+              ? isDark
+                ? 'bg-amber-950/60 text-amber-300 border border-amber-500/50 font-semibold shadow-[0_0_12px_rgba(245,158,11,0.2)]'
+                : 'bg-amber-100 text-amber-900 border border-amber-300 font-semibold'
+              : isDark
+              ? 'text-slate-400 hover:text-amber-300 hover:bg-slate-800/40'
+              : 'text-slate-600 hover:text-amber-700 hover:bg-slate-100'
+          }`}
+        >
+          <Layers className={`h-3.5 w-3.5 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
+          <span>Autres & Divers</span>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
+              isDark ? 'bg-amber-900/40 text-amber-300' : 'bg-amber-200/70 text-amber-800'
+            }`}
+          >
+            {categoryCounts.other}
+          </span>
+        </button>
       </div>
 
       {/* Action Toolbar Header */}
@@ -432,9 +567,10 @@ export const EmailList: React.FC<EmailListProps> = ({
           >
             <button
               type="button"
-              onClick={() => setFilterType('all')}
-              className={`rounded-md px-2.5 py-1 transition ${
-                filterType === 'all'
+              id="filter-all-btn"
+              onClick={() => handleFilterClick('all')}
+              className={`rounded-md px-2.5 py-1 transition cursor-pointer ${
+                currentFilter === 'all'
                   ? isDark
                     ? 'bg-slate-800 font-semibold text-cyan-400 border border-cyan-500/30 shadow-xs'
                     : 'bg-white font-semibold text-slate-900 shadow-xs'
@@ -447,9 +583,10 @@ export const EmailList: React.FC<EmailListProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setFilterType('unread')}
-              className={`rounded-md px-2.5 py-1 transition ${
-                filterType === 'unread'
+              id="filter-unread-btn"
+              onClick={() => handleFilterClick('unread')}
+              className={`rounded-md px-2.5 py-1 transition cursor-pointer ${
+                currentFilter === 'unread'
                   ? isDark
                     ? 'bg-slate-800 font-semibold text-cyan-400 border border-cyan-500/30 shadow-xs'
                     : 'bg-white font-semibold text-slate-900 shadow-xs'
@@ -462,9 +599,10 @@ export const EmailList: React.FC<EmailListProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setFilterType('starred')}
-              className={`rounded-md px-2.5 py-1 transition ${
-                filterType === 'starred'
+              id="filter-starred-btn"
+              onClick={() => handleFilterClick('starred')}
+              className={`rounded-md px-2.5 py-1 transition cursor-pointer ${
+                currentFilter === 'starred'
                   ? isDark
                     ? 'bg-slate-800 font-semibold text-cyan-400 border border-cyan-500/30 shadow-xs'
                     : 'bg-white font-semibold text-slate-900 shadow-xs'
@@ -670,7 +808,7 @@ export const EmailList: React.FC<EmailListProps> = ({
                       >
                         Changer la catégorie
                       </div>
-                      {(['pro', 'personal', 'sites'] as const).map((c) => (
+                      {(['pro', 'personal', 'sites', 'other'] as const).map((c) => (
                         <button
                           key={c}
                           type="button"
@@ -694,6 +832,7 @@ export const EmailList: React.FC<EmailListProps> = ({
                             {c === 'pro' && <Briefcase className="h-3.5 w-3.5 text-cyan-400" />}
                             {c === 'personal' && <User className="h-3.5 w-3.5 text-emerald-400" />}
                             {c === 'sites' && <Globe className="h-3.5 w-3.5 text-violet-400" />}
+                            {c === 'other' && <Layers className="h-3.5 w-3.5 text-amber-400" />}
                             <span>{CATEGORIES[c].label}</span>
                           </div>
                           {thread.category === c && <Check className="h-3 w-3 text-cyan-400" />}
@@ -703,41 +842,72 @@ export const EmailList: React.FC<EmailListProps> = ({
                   )}
                 </div>
 
-                {/* Senders Summary + Thread Count Badge */}
-                <div className="w-36 sm:w-44 shrink-0 flex items-center gap-1.5 truncate">
-                  <span
-                    className={`truncate ${
-                      thread.isUnread
-                        ? isDark
-                          ? 'font-bold text-white'
-                          : 'font-bold text-slate-900'
-                        : isDark
-                        ? 'font-normal text-slate-400'
-                        : 'font-normal text-slate-600'
-                    }`}
-                    title={thread.sendersSummary}
-                  >
-                    {thread.sendersSummary}
-                  </span>
-
-                  {thread.messageCount > 1 && (
+                {/* Senders or Recipient Summary + Thread Count Badge */}
+                {thread.isSentThread ? (
+                  <div className="w-36 sm:w-48 shrink-0 flex items-center gap-1.5 truncate">
                     <span
-                      className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold shrink-0 ${
-                        isDark
-                          ? 'bg-cyan-950/70 text-cyan-300 border border-cyan-800/60'
-                          : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
+                      className={`truncate text-xs ${
+                        thread.isUnread
+                          ? isDark
+                            ? 'font-bold text-white'
+                            : 'font-bold text-slate-900'
+                          : isDark
+                          ? 'font-medium text-slate-300 group-hover:text-cyan-200'
+                          : 'font-medium text-slate-700 group-hover:text-cyan-900'
                       }`}
-                      title={`${thread.messageCount} messages dans cette discussion`}
+                      title={`Destinataire : ${thread.recipientSummary}`}
                     >
-                      {thread.messageCount}
+                      {thread.recipientSummary}
                     </span>
-                  )}
-                </div>
+                    {thread.messageCount > 1 && (
+                      <span
+                        className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold shrink-0 ${
+                          isDark
+                            ? 'bg-slate-800 text-slate-300 border border-slate-700'
+                            : 'bg-slate-200 text-slate-700 border border-slate-300'
+                        }`}
+                        title={`${thread.messageCount} messages dans cette discussion`}
+                      >
+                        {thread.messageCount}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="w-36 sm:w-44 shrink-0 flex items-center gap-1.5 truncate">
+                    <span
+                      className={`truncate ${
+                        thread.isUnread
+                          ? isDark
+                            ? 'font-bold text-white'
+                            : 'font-bold text-slate-900'
+                          : isDark
+                          ? 'font-normal text-slate-400'
+                          : 'font-normal text-slate-600'
+                      }`}
+                      title={thread.sendersSummary}
+                    >
+                      {thread.sendersSummary}
+                    </span>
 
-                {/* Subject & Snippet */}
-                <div className="flex-1 min-w-0 flex items-center gap-2 truncate">
+                    {thread.messageCount > 1 && (
+                      <span
+                        className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold shrink-0 ${
+                          isDark
+                            ? 'bg-cyan-950/70 text-cyan-300 border border-cyan-800/60'
+                            : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
+                        }`}
+                        title={`${thread.messageCount} messages dans cette discussion`}
+                      >
+                        {thread.messageCount}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Subject only (Aperçu épuré : Expéditeur + Objet uniquement) */}
+                <div className="flex-1 min-w-0 flex items-center truncate">
                   <span
-                    className={`truncate ${
+                    className={`truncate text-sm ${
                       thread.isUnread
                         ? isDark
                           ? 'font-semibold text-white'
@@ -746,15 +916,9 @@ export const EmailList: React.FC<EmailListProps> = ({
                         ? 'font-normal text-slate-300'
                         : 'font-normal text-slate-700'
                     }`}
+                    title={thread.subject}
                   >
                     {thread.subject}
-                  </span>
-                  <span
-                    className={`font-normal truncate hidden sm:inline ${
-                      isDark ? 'text-slate-500' : 'text-slate-400'
-                    }`}
-                  >
-                    - {latest.snippet}
                   </span>
                 </div>
 

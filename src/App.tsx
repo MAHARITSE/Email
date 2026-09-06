@@ -3,8 +3,14 @@ import {
   initUniversalAuth,
   universalSignIn,
   universalLogout,
+  setCachedUserAndToken,
   AuthenticatedUser,
 } from './services/googleAuth';
+import {
+  getStoredAccounts,
+  removeAccountFromStorage,
+  StoredAccount,
+} from './services/multiAccountService';
 import {
   fetchProfile,
   fetchLabels,
@@ -33,9 +39,11 @@ import { SignInPrompt } from './components/SignInPrompt';
 import { AttachmentExtractor } from './components/AttachmentExtractor';
 import { ContactsManagerModal } from './components/ContactsManagerModal';
 import { SignatureSettingsModal } from './components/SignatureSettingsModal';
+import { AgendaView } from './components/AgendaView';
 import { ThemeToggle } from './components/ThemeToggle';
 import { useTheme } from './context/ThemeContext';
 import { getLocalContacts, importContactsFromParsedEmails } from './services/contactsService';
+import { getPendingTasksCount } from './services/agendaService';
 import {
   EmailCategory,
   classifyEmailFast,
@@ -53,6 +61,7 @@ export default function App() {
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<StoredAccount[]>(() => getStoredAccounts());
 
   // Mailbox data state
   const [profile, setProfile] = useState<GmailProfile | null>(null);
@@ -61,14 +70,15 @@ export default function App() {
   const [emails, setEmails] = useState<ParsedEmail[]>([]);
   const [selectedEmail, setSelectedEmail] = useState<ParsedEmail | null>(null);
   const [isLoadingEmails, setIsLoadingEmails] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'unread' | 'starred'>('all');
 
   // Email Category & AI Classification state
   const [selectedCategory, setSelectedCategory] = useState<EmailCategory>('all');
-  const [emailCategories, setEmailCategories] = useState<Record<string, 'pro' | 'personal' | 'sites'>>(() =>
+  const [emailCategories, setEmailCategories] = useState<Record<string, 'pro' | 'personal' | 'sites' | 'other'>>(() =>
     loadManualOverrides()
   );
 
-  // Search & Pagination state
+  // Search & Pagination state (50 emails per page)
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSearch, setActiveSearch] = useState('');
   const [pageTokens, setPageTokens] = useState<string[]>(['']);
@@ -81,14 +91,18 @@ export default function App() {
   const [isContactsOpen, setIsContactsOpen] = useState(false);
   const [isSignaturesOpen, setIsSignaturesOpen] = useState(false);
   const [contactsCount, setContactsCount] = useState(() => getLocalContacts().length);
+  const [agendaCount, setAgendaCount] = useState(() => getPendingTasksCount());
   const [composeInitialData, setComposeInitialData] = useState<Partial<ComposeOptions> | undefined>(undefined);
   const [confirmationDialog, setConfirmationDialog] = useState<ConfirmationDialogState | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Sync contacts count & listen for auth expiry
+  // Sync contacts count, agenda count & listen for auth expiry
   useEffect(() => {
     const handleUpdate = () => {
       setContactsCount(getLocalContacts().length);
+    };
+    const handleAgendaUpdate = () => {
+      setAgendaCount(getPendingTasksCount());
     };
     const handleAuthExpired = (e: any) => {
       const msg =
@@ -101,9 +115,11 @@ export default function App() {
     };
 
     window.addEventListener('gmail-contacts-updated', handleUpdate);
+    window.addEventListener('gmail-agenda-updated', handleAgendaUpdate);
     window.addEventListener('gmail-auth-expired', handleAuthExpired);
     return () => {
       window.removeEventListener('gmail-contacts-updated', handleUpdate);
+      window.removeEventListener('gmail-agenda-updated', handleAgendaUpdate);
       window.removeEventListener('gmail-auth-expired', handleAuthExpired);
     };
   }, []);
@@ -130,7 +146,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Google Sign-In action
+  // 2. Google Sign-In & Multi-Account actions
   const handleSignIn = async () => {
     try {
       setIsLoggingIn(true);
@@ -140,6 +156,7 @@ export default function App() {
         setUser(res.user);
         setToken(res.accessToken);
         setNeedsAuth(false);
+        setAccounts(getStoredAccounts());
         showToast('Authentification réussie avec Google');
       }
     } catch (err: any) {
@@ -153,6 +170,60 @@ export default function App() {
     }
   };
 
+  const handleAddAccount = async () => {
+    try {
+      setIsLoggingIn(true);
+      const res = await universalSignIn();
+      if (res) {
+        setUser(res.user);
+        setToken(res.accessToken);
+        setNeedsAuth(false);
+        const updated = getStoredAccounts();
+        setAccounts(updated);
+        setSelectedEmail(null);
+        showToast(`Compte ajouté : ${res.user.email || res.user.displayName}`);
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Impossible d\'ajouter le compte Google.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleSwitchAccount = (targetEmail: string) => {
+    const stored = getStoredAccounts();
+    const target = stored.find(
+      (a) => a.user.email?.toLowerCase() === targetEmail.toLowerCase()
+    );
+    if (target) {
+      setUser(target.user);
+      setToken(target.token);
+      setCachedUserAndToken(target.user, target.token);
+      setAccounts(stored);
+      setSelectedEmail(null);
+      setEmails([]);
+      showToast(`Compte actif : ${target.user.email}`);
+    }
+  };
+
+  const handleRemoveAccount = (targetEmail: string) => {
+    const updated = removeAccountFromStorage(targetEmail);
+    setAccounts(updated);
+    showToast(`Compte ${targetEmail} retiré.`);
+    if (user?.email?.toLowerCase() === targetEmail.toLowerCase()) {
+      if (updated.length > 0) {
+        const next = updated[0];
+        setUser(next.user);
+        setToken(next.token);
+        setCachedUserAndToken(next.user, next.token);
+        setSelectedEmail(null);
+        setEmails([]);
+      } else {
+        handleSignOut();
+      }
+    }
+  };
+
   const handleSignOut = async () => {
     await universalLogout();
     setUser(null);
@@ -160,6 +231,7 @@ export default function App() {
     setProfile(null);
     setEmails([]);
     setSelectedEmail(null);
+    setAccounts([]);
     setNeedsAuth(true);
   };
 
@@ -177,31 +249,48 @@ export default function App() {
     }
   }, []);
 
-  // 4. Load messages for selected folder/label or search query
+  // 4. Load messages for selected folder/label or search query (50 items per page + cross-page unread retrieval)
   const loadMessages = useCallback(
     async (
       activeToken: string,
       labelId: string,
       search: string,
+      filter: 'all' | 'unread' | 'starred' = 'all',
       targetPageToken: string = ''
     ) => {
       try {
         setIsLoadingEmails(true);
         const params: any = {
-          maxResults: 20,
+          maxResults: 50,
           pageToken: targetPageToken || undefined,
         };
 
+        const queryParts: string[] = [];
         if (search.trim()) {
-          params.query = search.trim();
-        } else {
-          // Standard Gmail system folders mapping
+          queryParts.push(search.trim());
+        }
+
+        if (filter === 'unread') {
+          queryParts.push('is:unread');
+        } else if (filter === 'starred' && labelId !== 'STARRED') {
+          queryParts.push('is:starred');
+        }
+
+        if (queryParts.length > 0) {
+          // If we have a query, specify folder context
           if (['INBOX', 'STARRED', 'SENT', 'DRAFT', 'SPAM', 'TRASH'].includes(labelId)) {
-            params.labelIds = [labelId];
+            if (labelId === 'INBOX' && !search.includes('label:')) {
+              queryParts.push('label:INBOX');
+            } else if (labelId !== 'INBOX') {
+              params.labelIds = [labelId];
+            }
           } else {
-            // User custom label
             params.labelIds = [labelId];
           }
+          params.query = queryParts.join(' ');
+        } else {
+          // Standard Gmail system folders mapping
+          params.labelIds = [labelId];
         }
 
         const res = await listMessages(activeToken, params);
@@ -240,15 +329,22 @@ export default function App() {
 
   useEffect(() => {
     if (!token) return;
-    if (selectedLabelId === 'ATTACHMENTS') {
+    if (selectedLabelId === 'ATTACHMENTS' || selectedLabelId === 'AGENDA') {
       setSelectedEmail(null);
       return;
     }
     setPageIndex(0);
     setPageTokens(['']);
     setSelectedEmail(null);
-    loadMessages(token, selectedLabelId, activeSearch, '');
-  }, [token, selectedLabelId, activeSearch, loadMessages]);
+    loadMessages(token, selectedLabelId, activeSearch, statusFilter, '');
+  }, [token, selectedLabelId, activeSearch, statusFilter, loadMessages]);
+
+  const handleStatusFilterChange = (newFilter: 'all' | 'unread' | 'starred') => {
+    setStatusFilter(newFilter);
+    setPageIndex(0);
+    setPageTokens(['']);
+    setSelectedEmail(null);
+  };
 
   // Pagination Handlers
   const handleNextPage = () => {
@@ -256,22 +352,22 @@ export default function App() {
     const newTokens = [...pageTokens, nextPageToken];
     setPageTokens(newTokens);
     setPageIndex(pageIndex + 1);
-    loadMessages(token, selectedLabelId, activeSearch, nextPageToken);
+    loadMessages(token, selectedLabelId, activeSearch, statusFilter, nextPageToken);
   };
 
   const handlePrevPage = () => {
     if (!token || pageIndex <= 0) return;
     const targetToken = pageTokens[pageIndex - 1] || '';
     setPageIndex(pageIndex - 1);
-    loadMessages(token, selectedLabelId, activeSearch, targetToken);
+    loadMessages(token, selectedLabelId, activeSearch, statusFilter, targetToken);
   };
 
   const handleRefresh = () => {
     if (!token) return;
     loadProfileAndLabels(token);
-    if (selectedLabelId !== 'ATTACHMENTS') {
+    if (selectedLabelId !== 'ATTACHMENTS' && selectedLabelId !== 'AGENDA') {
       const currentToken = pageTokens[pageIndex] || '';
-      loadMessages(token, selectedLabelId, activeSearch, currentToken);
+      loadMessages(token, selectedLabelId, activeSearch, statusFilter, currentToken);
     }
     showToast('Boîte de réception actualisée');
   };
@@ -323,7 +419,7 @@ export default function App() {
 
   const handleUpdateEmailCategory = (
     emailId: string,
-    category: 'pro' | 'personal' | 'sites'
+    category: 'pro' | 'personal' | 'sites' | 'other'
   ) => {
     saveManualOverride(emailId, category);
     setEmailCategories((prev) => ({
@@ -336,16 +432,20 @@ export default function App() {
           ? 'Professionnel'
           : category === 'personal'
           ? 'Personnel'
-          : 'Sites & Abonnements'
+          : category === 'sites'
+          ? 'Sites & Abonnements'
+          : 'Autres & Divers'
       }"`
     );
   };
 
   const categoryCounts = React.useMemo(() => {
-    const counts = { pro: 0, personal: 0, sites: 0 };
+    const counts = { pro: 0, personal: 0, sites: 0, other: 0 };
+    const seenThreads = new Set<string>();
     emails.forEach((em) => {
-      // ONLY count unread messages for smart filters
-      if (em.isUnread) {
+      const threadKey = em.threadId || em.id;
+      if (!seenThreads.has(threadKey)) {
+        seenThreads.add(threadKey);
         const cat = emailCategories[em.id] || classifyEmailFast(em);
         if (counts[cat] !== undefined) {
           counts[cat]++;
@@ -604,7 +704,12 @@ export default function App() {
       ? email.subject
       : `Re: ${email.subject}`;
 
-    let toAddr = email.fromEmail;
+    const isSentByMe = Boolean(
+      (currentUserEmail && email.fromEmail?.toLowerCase().trim() === currentUserEmail.toLowerCase().trim()) ||
+      email.labelIds?.includes('SENT') ||
+      email.fromName?.toLowerCase() === 'moi'
+    );
+    let toAddr = isSentByMe ? (email.to || email.fromEmail) : email.fromEmail;
     let ccAddr = undefined;
 
     if (mode === 'replyAll') {
@@ -729,11 +834,15 @@ export default function App() {
       <Header
         user={user}
         profile={profile}
+        accounts={accounts}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         onSearchSubmit={handleSearchSubmit}
         onToggleMobileSidebar={() => setIsMobileSidebarOpen(true)}
         onSignOut={handleSignOut}
+        onAddAccount={handleAddAccount}
+        onSwitchAccount={handleSwitchAccount}
+        onRemoveAccount={handleRemoveAccount}
         onRefresh={handleRefresh}
         isRefreshing={isLoadingEmails}
       />
@@ -766,6 +875,11 @@ export default function App() {
           onOpenContacts={() => setIsContactsOpen(true)}
           contactsCount={contactsCount}
           onOpenSignatures={() => setIsSignaturesOpen(true)}
+          onOpenAgenda={() => {
+            setSelectedLabelId('AGENDA');
+            setSelectedEmail(null);
+          }}
+          agendaCount={agendaCount}
         />
 
         {/* Content Pane */}
@@ -789,6 +903,13 @@ export default function App() {
               onOpenReply={handleOpenReply}
               onOpenForward={handleOpenForward}
               onRequestSendQuickReply={handleRequestSend}
+            />
+          ) : selectedLabelId === 'AGENDA' ? (
+            <AgendaView
+              onBackToMailbox={() => {
+                setSelectedLabelId('INBOX');
+                setSelectedEmail(null);
+              }}
             />
           ) : selectedLabelId === 'ATTACHMENTS' ? (
             <AttachmentExtractor
@@ -820,6 +941,8 @@ export default function App() {
               emails={emails}
               isLoading={isLoadingEmails}
               selectedLabelName={activeSearch ? `Recherche : "${activeSearch}"` : selectedLabelName}
+              selectedLabelId={selectedLabelId}
+              currentUserEmail={currentUserEmail}
               selectedCategory={selectedCategory}
               onSelectCategory={setSelectedCategory}
               emailCategories={emailCategories}
@@ -836,6 +959,8 @@ export default function App() {
               onPrevPage={handlePrevPage}
               onNextPage={handleNextPage}
               pageIndex={pageIndex}
+              statusFilter={statusFilter}
+              onStatusFilterChange={handleStatusFilterChange}
             />
           )}
         </main>

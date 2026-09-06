@@ -14,14 +14,10 @@ import {
   ChevronDown,
   FileSignature,
   Settings,
+  Globe,
 } from 'lucide-react';
 import { ComposeOptions } from '../services/gmailApi';
 import { useTheme } from '../context/ThemeContext';
-import {
-  improveEmailText,
-  draftEmailWithAi,
-  ImproveAction,
-} from '../services/aiAssistant';
 import { ContactAutocompleteInput } from './ContactAutocompleteInput';
 import {
   EmailSignature,
@@ -29,6 +25,8 @@ import {
   getDefaultSignature,
   formatSignatureText,
 } from '../services/signatureService';
+import { AiWriterPanel } from './AiWriterPanel';
+import { RichTextEmailEditor } from './RichTextEmailEditor';
 
 interface ComposeModalProps {
   isOpen: boolean;
@@ -68,11 +66,6 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
 
   // AI Assistant states
   const [showAiDraftPanel, setShowAiDraftPanel] = useState(false);
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [aiTone, setAiTone] = useState<'professionnel' | 'amical' | 'concis' | 'formel'>('professionnel');
-  const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
-  const [isImprovingBody, setIsImprovingBody] = useState(false);
-  const [showImproveMenu, setShowImproveMenu] = useState(false);
 
   // Initialize or update fields when modal opens
   useEffect(() => {
@@ -174,46 +167,6 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
     });
   };
 
-  // AI Draft generator
-  const handleAiDraftSubmit = async () => {
-    if (!aiPrompt.trim()) return;
-    setIsGeneratingDraft(true);
-    setError(null);
-    try {
-      const result = await draftEmailWithAi(aiPrompt, to || undefined, aiTone);
-      if (!subject.trim()) {
-        setSubject(result.subject);
-      }
-
-      // Check default signature
-      const defaultSig = getDefaultSignature(initialData?.inReplyTo ? 'reply' : 'new');
-      const sigFormatted = defaultSig ? formatSignatureText(defaultSig) : '';
-
-      setBody(sigFormatted ? `${result.body}\n\n${sigFormatted}` : result.body);
-      setShowAiDraftPanel(false);
-    } catch (err: any) {
-      setError(`Erreur lors de la rédaction par l'IA : ${err.message}`);
-    } finally {
-      setIsGeneratingDraft(false);
-    }
-  };
-
-  // AI Improve existing text
-  const handleImproveText = async (action: ImproveAction) => {
-    if (!body.trim()) return;
-    setIsImprovingBody(true);
-    setShowImproveMenu(false);
-    setError(null);
-    try {
-      const improved = await improveEmailText(body, action);
-      setBody(improved);
-    } catch (err: any) {
-      setError(`Erreur d'amélioration : ${err.message}`);
-    } finally {
-      setIsImprovingBody(false);
-    }
-  };
-
   return (
     <div
       id="compose-modal-container"
@@ -222,7 +175,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
           ? 'inset-0'
           : isMinimized
           ? 'bottom-0 right-4 sm:right-10 w-72 sm:w-80 h-12 shadow-2xl'
-          : 'bottom-0 right-2 sm:right-8 w-full max-w-2xl h-[600px] shadow-2xl rounded-t-xl'
+          : 'bottom-0 right-2 sm:right-8 w-full max-w-2xl h-[640px] shadow-2xl rounded-t-xl'
       }`}
     >
       <form
@@ -254,7 +207,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
             <button
               type="button"
               onClick={() => setIsMinimized(!isMinimized)}
-              className="p-1 rounded hover:bg-slate-500/20 transition"
+              className="p-1 rounded hover:bg-slate-500/20 transition cursor-pointer"
               title={isMinimized ? 'Agrandir' : 'Réduire'}
             >
               <Minus className="h-3.5 w-3.5" />
@@ -264,7 +217,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               <button
                 type="button"
                 onClick={() => setIsMaximized(!isMaximized)}
-                className="p-1 rounded hover:bg-slate-500/20 transition"
+                className="p-1 rounded hover:bg-slate-500/20 transition cursor-pointer"
                 title={isMaximized ? 'Restaurer la taille' : 'Plein écran'}
               >
                 {isMaximized ? (
@@ -279,7 +232,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               id="close-compose-modal-btn"
               type="button"
               onClick={onClose}
-              className="p-1 rounded hover:bg-red-500/20 hover:text-red-500 transition"
+              className="p-1 rounded hover:bg-red-500/20 hover:text-red-500 transition cursor-pointer"
               title="Fermer"
             >
               <X className="h-4 w-4" />
@@ -297,11 +250,11 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
           </div>
         )}
 
-        {/* AI Generator Banner (Toggleable) */}
+        {/* AI Generator Toggle Header */}
         <div
           className={`border-b px-4 py-2 transition-colors ${
             isDark
-              ? 'bg-gradient-to-r from-cyan-950/25 via-slate-900/30 to-violet-950/25 border-slate-800'
+              ? 'bg-gradient-to-r from-cyan-950/30 via-slate-900/40 to-violet-950/30 border-slate-800'
               : 'bg-gradient-to-r from-blue-50 via-slate-50 to-purple-50 border-slate-200'
           }`}
         >
@@ -309,147 +262,41 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
             <button
               type="button"
               onClick={() => setShowAiDraftPanel(!showAiDraftPanel)}
-              className={`flex items-center gap-2 text-xs font-mono font-semibold transition ${
+              className={`flex items-center gap-2 text-xs font-mono font-bold transition cursor-pointer ${
                 isDark ? 'text-cyan-400 hover:text-cyan-300' : 'text-blue-700 hover:text-blue-800'
               }`}
             >
               <Sparkles className="h-3.5 w-3.5" />
-              <span>{showAiDraftPanel ? 'Masquer l\'assistant IA' : 'Rédiger tout l\'email avec l\'IA'}</span>
+              <span>{showAiDraftPanel ? 'Masquer le Rédacteur IA' : '✨ Rédacteur d\'e-mails IA (WriteMail.ai style)'}</span>
             </button>
 
-            {body.trim() && (
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowImproveMenu(!showImproveMenu)}
-                  disabled={isImprovingBody}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono font-semibold transition ${
-                    isDark
-                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                      : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 shadow-2xs'
-                  }`}
-                >
-                  {isImprovingBody ? (
-                    <Loader2 className="h-3 w-3 animate-spin text-cyan-500" />
-                  ) : (
-                    <Wand2 className="h-3 w-3 text-cyan-500" />
-                  )}
-                  <span>Améliorer le texte</span>
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-
-                {showImproveMenu && (
-                  <div
-                    className={`absolute right-0 top-full mt-1 w-52 rounded-lg border shadow-xl z-20 py-1 font-sans text-xs ${
-                      isDark
-                        ? 'bg-slate-900 border-slate-700 text-slate-200'
-                        : 'bg-white border-slate-200 text-slate-800 shadow-md'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleImproveText('professional')}
-                      className={`w-full text-left px-3 py-1.5 transition ${
-                        isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'
-                      }`}
-                    >
-                      Rendre plus professionnel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleImproveText('concise')}
-                      className={`w-full text-left px-3 py-1.5 transition ${
-                        isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'
-                      }`}
-                    >
-                      Raccourcir & synthétiser
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleImproveText('proofread')}
-                      className={`w-full text-left px-3 py-1.5 transition ${
-                        isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'
-                      }`}
-                    >
-                      Corriger orthographe & grammaire
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleImproveText('friendly')}
-                      className={`w-full text-left px-3 py-1.5 transition ${
-                        isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'
-                      }`}
-                    >
-                      Rendre plus chaleureux
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
+            <span className="text-[10px] font-mono text-cyan-400 font-semibold flex items-center gap-1">
+              <Globe className="h-3 w-3" />
+              <span>Choix de langue & ton</span>
+            </span>
           </div>
 
-          {/* AI Drafting Panel Drawer */}
+          {/* AI Drafting Panel Drawer (WriteMail.ai style) */}
           {showAiDraftPanel && (
-            <div className="mt-2.5 pt-2.5 border-t border-inherit space-y-2">
-              <input
-                type="text"
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder="Ex: Demander un devis pour la maintenance des serveurs Cloud en proposant un rendez-vous mardi..."
-                className={`w-full px-3 py-2 text-xs rounded-lg border outline-none font-sans ${
-                  isDark
-                    ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500 focus:border-cyan-400'
-                    : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-cyan-600'
-                }`}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    handleAiDraftSubmit();
+            <div className="mt-2.5">
+              <AiWriterPanel
+                mode={initialData?.inReplyTo ? 'reply' : 'compose'}
+                recipient={to}
+                currentText={body}
+                onApplyDraft={(result) => {
+                  if (!subject.trim()) {
+                    setSubject(result.subject);
                   }
+                  const isReply = Boolean(initialData?.inReplyTo);
+                  const defaultSig = getDefaultSignature(isReply ? 'reply' : 'new');
+                  const sigFormatted = defaultSig ? formatSignatureText(defaultSig) : '';
+                  setBody(sigFormatted ? `${result.body}\n\n--\n${sigFormatted}` : result.body);
+                  setShowAiDraftPanel(false);
+                }}
+                onApplyImprovedText={(improved) => {
+                  setBody(improved);
                 }}
               />
-
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5">
-                  <span className={`text-[10px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Ton :</span>
-                  {(['professionnel', 'amical', 'concis', 'formel'] as const).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setAiTone(t)}
-                      className={`px-2 py-0.5 rounded text-[10px] font-mono capitalize transition ${
-                        aiTone === t
-                          ? isDark
-                            ? 'bg-cyan-500 text-slate-950 font-bold'
-                            : 'bg-blue-600 text-white font-semibold'
-                          : isDark
-                          ? 'text-slate-400 hover:text-slate-200'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleAiDraftSubmit}
-                  disabled={isGeneratingDraft || !aiPrompt.trim()}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-semibold transition disabled:opacity-50 ${
-                    isDark
-                      ? 'bg-cyan-500 text-slate-950 hover:bg-cyan-400'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
-                  }`}
-                >
-                  {isGeneratingDraft ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Wand2 className="h-3.5 w-3.5" />
-                  )}
-                  <span>Générer l'email</span>
-                </button>
-              </div>
             </div>
           )}
         </div>
@@ -469,7 +316,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowCc(true)}
-                className="hover:text-cyan-500 uppercase px-1 py-0.5 rounded"
+                className="hover:text-cyan-500 uppercase px-1 py-0.5 rounded cursor-pointer"
               >
                 Cc
               </button>
@@ -478,7 +325,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowBcc(true)}
-                className="hover:text-cyan-500 uppercase px-1 py-0.5 rounded"
+                className="hover:text-cyan-500 uppercase px-1 py-0.5 rounded cursor-pointer"
               >
                 Cci
               </button>
@@ -527,16 +374,18 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
           />
         </div>
 
-        {/* Message Body */}
-        <div className="flex-1 p-4 overflow-y-auto">
-          <textarea
-            id="compose-body-textarea"
+        {/* Message Body with Rich Color & Text Editor */}
+        <div className="flex-1 p-3 sm:p-4 overflow-y-auto flex flex-col">
+          <RichTextEmailEditor
+            id="compose-body-editor"
             value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Rédigez votre message ici..."
-            className={`h-full w-full resize-none bg-transparent text-sm leading-relaxed outline-hidden font-sans ${
-              isDark ? 'text-slate-200 placeholder:text-slate-600' : 'text-slate-800 placeholder:text-slate-400'
-            }`}
+            onChange={setBody}
+            placeholder="Rédigez votre message ici (saisie en couleur, surlignage et styles autorisés)..."
+            minHeight="240px"
+            className="flex-1"
+            onToggleAi={() => setShowAiDraftPanel(!showAiDraftPanel)}
+            isAiActive={showAiDraftPanel}
+            aiButtonLabel="Aide-moi à écrire"
           />
         </div>
 
@@ -550,7 +399,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
             <button
               id="compose-send-button"
               type="submit"
-              className={`flex items-center gap-2 rounded-lg px-5 py-2 text-xs font-mono font-bold uppercase tracking-wider transition active:scale-[0.98] ${
+              className={`flex items-center gap-2 rounded-lg px-5 py-2 text-xs font-mono font-bold uppercase tracking-wider transition active:scale-[0.98] cursor-pointer ${
                 isDark
                   ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-[0_0_15px_rgba(34,211,238,0.3)]'
                   : 'bg-cyan-600 hover:bg-cyan-700 text-white shadow-md'
@@ -565,7 +414,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowSignatureMenu(!showSignatureMenu)}
-                className={`p-2 rounded-lg transition flex items-center gap-1.5 text-xs font-mono ${
+                className={`p-2 rounded-lg transition flex items-center gap-1.5 text-xs font-mono cursor-pointer ${
                   isDark
                     ? 'hover:bg-slate-800 text-slate-400 hover:text-cyan-400'
                     : 'hover:bg-slate-200 text-slate-600 hover:text-slate-900'
@@ -594,7 +443,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
                       key={sig.id}
                       type="button"
                       onClick={() => handleInsertSignature(sig)}
-                      className={`w-full text-left px-3 py-2 flex items-center justify-between transition ${
+                      className={`w-full text-left px-3 py-2 flex items-center justify-between transition cursor-pointer ${
                         isDark ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-100 text-slate-700'
                       }`}
                     >
@@ -614,7 +463,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
                         setShowSignatureMenu(false);
                         onOpenSignatureSettings();
                       }}
-                      className={`w-full text-left px-3 py-2 flex items-center gap-2 border-t border-inherit text-cyan-400 font-mono text-[11px] transition ${
+                      className={`w-full text-left px-3 py-2 flex items-center gap-2 border-t border-inherit text-cyan-400 font-mono text-[11px] transition cursor-pointer ${
                         isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100 text-blue-600'
                       }`}
                     >
@@ -633,7 +482,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               type="button"
               onClick={handleSaveDraft}
               disabled={isSavingDraft}
-              className={`p-2 rounded-lg transition ${
+              className={`p-2 rounded-lg transition cursor-pointer ${
                 isDark
                   ? 'hover:bg-slate-800 text-slate-400 hover:text-white'
                   : 'hover:bg-slate-200 text-slate-600 hover:text-slate-900'
@@ -647,7 +496,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               id="compose-discard-button"
               type="button"
               onClick={onClose}
-              className="p-2 rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-500 transition"
+              className="p-2 rounded-lg text-slate-400 hover:bg-red-500/10 hover:text-red-500 transition cursor-pointer"
               title="Supprimer le brouillon"
             >
               <Trash2 className="h-4 w-4" />

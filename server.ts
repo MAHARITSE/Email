@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
@@ -7,7 +8,7 @@ import { GoogleGenAI } from '@google/genai';
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -83,7 +84,7 @@ async function generateGeminiWithFallbackAndRetry(
  * Rule-based heuristic email classifier (fast & deterministic)
  */
 function classifyEmailsHeuristic(emails: Array<{ id: string; from?: string; subject?: string; snippet?: string }>) {
-  const result: Record<string, 'pro' | 'personal' | 'sites'> = {};
+  const result: Record<string, 'pro' | 'personal' | 'sites' | 'other'> = {};
 
   for (const em of emails) {
     const from = (em.from || '').toLowerCase();
@@ -149,8 +150,19 @@ function classifyEmailsHeuristic(emails: Array<{ id: string; from?: string; subj
       snippet.includes('devis') ||
       snippet.includes('contrat');
 
+    const isOtherNotification =
+      from.includes('admin') ||
+      from.includes('securit') ||
+      from.includes('auth') ||
+      from.includes('verification') ||
+      subject.includes('code de confirmation') ||
+      subject.includes('sécurité') ||
+      snippet.includes('automatique');
+
     if (hasProKeyword) {
       result[em.id] = 'pro';
+    } else if (isOtherNotification) {
+      result[em.id] = 'other';
     } else if (isPersonalDomain) {
       result[em.id] = 'personal';
     } else {
@@ -169,10 +181,10 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 1. Améliorer / Corriger un email avec Gemini
+// 1. Améliorer / Corriger / Traduire un email avec Gemini
 app.post('/api/ai/improve-email', async (req, res) => {
   try {
-    const { text, action = 'proofread', instructions = '' } = req.body;
+    const { text, action = 'proofread', instructions = '', language = 'Français' } = req.body;
 
     if (!text || typeof text !== 'string' || !text.trim()) {
       return res.status(400).json({ error: 'Texte manquant' });
@@ -180,7 +192,6 @@ app.post('/api/ai/improve-email', async (req, res) => {
 
     const ai = getGemini();
     if (!ai) {
-      // Fallback si la clé n'est pas encore renseignée
       let fallbackText = text.trim();
       if (action === 'concise') {
         fallbackText = fallbackText.split('\n').filter(Boolean).slice(0, 3).join('\n');
@@ -215,6 +226,13 @@ app.post('/api/ai/improve-email', async (req, res) => {
         promptActionDescription =
           'Adopte un registre formel, soutenu avec des formules de politesse protocolaires irréprochables.';
         break;
+      case 'persuasive':
+        promptActionDescription =
+          'Adopte un ton persuasif, convaincant et commercial pour inciter le destinataire à l\'action.';
+        break;
+      case 'translate':
+        promptActionDescription = `Traduis fidèlement cet email vers la langue : ${language}.`;
+        break;
       case 'custom':
         promptActionDescription = instructions || 'Améliore la clarté et la qualité de ce message.';
         break;
@@ -222,13 +240,16 @@ app.post('/api/ai/improve-email', async (req, res) => {
         promptActionDescription = 'Corrige et améliore la qualité de ce texte.';
     }
 
-    const prompt = `Tu es un assistant expert en communication par email.
+    const targetLang = language && language !== 'Auto' ? language : 'la même langue que le texte d\'origine';
+
+    const prompt = `Tu es un assistant expert en communication par email (style Official AI Email Writer / WriteMail.ai).
 Tâche : ${promptActionDescription}
-${instructions ? `Instruction supplémentaire de l'utilisateur : ${instructions}` : ''}
+${instructions ? `Instruction spécifique : ${instructions}` : ''}
+Langue cible souhaitée pour le rendu final : ${targetLang}
 
 Consignes strictes :
-1. Reste dans la langue de l'email original (généralement en français sauf si l'email est dans une autre langue).
-2. Fournis directement le texte réécrit/amélioré, sans formules d'introduction comme "Voici votre email corrigé :", sans guillemets superflus, ni balises markdown superflues.
+1. Conserve impérativement la langue du texte d'origine ou traduis fidèlement dans la langue demandée : "${targetLang}". Si le texte d'origine est en anglais, conserve l'anglais. S'il est en malagasy, conserve le malagasy. Ne bascule JAMAIS vers le français si le texte ou la langue demandée est une autre langue.
+2. Fournis directement le texte réécrit/amélioré, sans formules d'introduction comme "Voici votre email corrigé :", sans guillemets superflus, ni balises markdown.
 
 Texte original :
 """
@@ -241,7 +262,6 @@ ${text}
       return res.json({ improvedText });
     } catch (aiErr: any) {
       console.warn('Gemini improve-email temporairement indisponible, utilisation du texte de secours:', aiErr?.message);
-      // Fallback gracieux sans renvoyer de code d'erreur bloquant 500
       let fallbackText = text.trim();
       if (action === 'professional' && !fallbackText.startsWith('Bonjour')) {
         fallbackText = `Bonjour,\n\n${fallbackText}\n\nCordialement,`;
@@ -254,10 +274,17 @@ ${text}
   }
 });
 
-// 2. Proposer des réponses intelligentes (Smart Replies)
+// 2. Proposer des réponses intelligentes (Smart Replies WriteMail.ai style)
 app.post('/api/ai/suggest-reply', async (req, res) => {
   try {
-    const { subject = '', body = '', sender = '', customPrompt = '' } = req.body;
+    const {
+      subject = '',
+      body = '',
+      sender = '',
+      customPrompt = '',
+      language = 'Français',
+      tone = 'professionnel',
+    } = req.body;
 
     const defaultSuggestions = [
       {
@@ -282,28 +309,35 @@ app.post('/api/ai/suggest-reply', async (req, res) => {
       return res.json({ suggestions: defaultSuggestions });
     }
 
-    const prompt = `Tu es un assistant email personnel intelligent.
-Analyse le courriel ci-dessous et propose 3 suggestions de réponses différentes prêtes à être envoyées (courtes, pertinentes et naturelles en français) :
-1. Une réponse positive ou confirmative (ex: accord, confirmation, remerciements).
-2. Une réponse demandant des précisions ou proposant une alternative.
-3. Une réponse déclinant poliment ou reportant l'échange.
+    const targetLang = language && language !== 'Auto' ? language : 'la même langue que l\'email reçu';
 
-${customPrompt ? `Note personnalisée souhaitée par l'utilisateur : "${customPrompt}" (intègre cette intention si pertinente)` : ''}
+    const prompt = `Tu es un assistant rédaction d'e-mails IA haute performance (WriteMail.ai style).
+Analyse le courriel ci-dessous et propose 3 suggestions de réponses intelligentes synthétiques prêtes à envoyer.
 
-Informations sur le courriel reçu :
+Langue obligatoire des réponses : ${targetLang}
+Ton général souhaité : ${tone || 'professionnel'}
+
+Format des 3 suggestions :
+1. Une réponse positive/acceptation (accord, confirmation, remerciements).
+2. Une réponse de clarification/alternative (demande de précision, date/heure alternative).
+3. Une réponse de refus poli/report.
+
+${customPrompt ? `Instruction spécifique de l'utilisateur : "${customPrompt}"` : ''}
+
+E-mail reçu :
 Expéditeur : ${sender || 'Non spécifié'}
 Objet : ${subject || 'Sans objet'}
-Corps du message :
+Corps :
 """
 ${(body || '').slice(0, 3000)}
 """
 
-Réponds UNIQUEMENT sous forme de JSON valide avec le schéma suivant :
+Réponds UNIQUEMENT sous forme de JSON valide avec ce schéma exact :
 {
   "suggestions": [
     {
-      "label": "Titre court du bouton (max 4 mots, ex: Confirmer réception)",
-      "replyText": "Le texte complet de la réponse prête à envoyer avec salutations et formule de politesse",
+      "label": "Titre court du bouton dans la langue (${targetLang}, max 4 mots, ex: Confirmer réception / Mpanaiky)",
+      "replyText": "Le texte complet de la réponse en ${targetLang} avec salutations et formule de politesse",
       "tone": "positive" | "clarify" | "decline"
     }
   ]
@@ -333,10 +367,17 @@ Réponds UNIQUEMENT sous forme de JSON valide avec le schéma suivant :
   }
 });
 
-// 3. Rédiger un nouvel email à partir d'une consigne
+// 3. Rédiger un e-mail complet (Rédacteur IA WriteMail.ai style)
 app.post('/api/ai/draft-email', async (req, res) => {
   try {
-    const { prompt: userPrompt, recipient = '', tone = 'professionnel' } = req.body;
+    const {
+      prompt: userPrompt,
+      recipient = '',
+      tone = 'professionnel',
+      language = 'Français',
+      length = 'moyen',
+      emailContext,
+    } = req.body;
 
     if (!userPrompt || typeof userPrompt !== 'string' || !userPrompt.trim()) {
       return res.status(400).json({ error: 'Consigne manquante' });
@@ -344,7 +385,7 @@ app.post('/api/ai/draft-email', async (req, res) => {
 
     const defaultDraft = {
       subject: `Message concernant : ${userPrompt.slice(0, 30)}...`,
-      body: `Bonjour ${recipient ? recipient : ''},\n\nJe vous contacte concernant la demande suivante : ${userPrompt}.\n\nRestant à votre disposition pour tout échange,\n\nBien cordialement,`,
+      body: `Bonjour ${recipient ? recipient : ''},\n\nJe vous contacte concernant : ${userPrompt}.\n\nRestant à votre disposition,\n\nBien cordialement,`,
     };
 
     const ai = getGemini();
@@ -352,21 +393,53 @@ app.post('/api/ai/draft-email', async (req, res) => {
       return res.json(defaultDraft);
     }
 
-    const prompt = `Tu es un assistant de rédaction d'emails de haut niveau.
-Rédige un email complet et soigné à partir de la consigne suivante :
-Consigne : "${userPrompt}"
-Destinataire ciblé : ${recipient || 'Non spécifié'}
-Ton souhaité : ${tone || 'professionnel et courtois'}
+    const targetLang =
+      language && language !== 'Auto'
+        ? language
+        : emailContext?.body
+        ? "la même langue que le courriel reçu dans le contexte ci-dessous (ex. anglais si le message est en anglais, malagasy si en malagasy, allemand si en allemand)"
+        : 'Français';
 
-Consignes :
-1. Rédige en français impeccable (sauf si la consigne demande une autre langue).
-2. Fournis un objet (subject) percutant, précis et engageant.
-3. Fournis un corps (body) bien structuré avec salutations adaptées, paragraphes aérés et formule de politesse.
+    let lengthInstruction = 'Longueur moyenne (2 à 3 paragraphes concis).';
+    if (length === 'court') {
+      lengthInstruction = 'Très court et direct (1 à 2 phrases clés, style réponse rapide).';
+    } else if (length === 'détaillé') {
+      lengthInstruction = 'Détaillé, complet et très argumenté avec plusieurs paragraphes bien structurés.';
+    }
 
-Réponds UNIQUEMENT en JSON avec ce format :
+    const contextSection = emailContext
+      ? `CONTEXTE DE L'EMAIL AUQUEL ON RÉPOND :
+Expéditeur initial : ${emailContext.sender || 'Inconnu'}
+Objet initial : ${emailContext.subject || 'Sans objet'}
+Dernier message reçu :
+"""
+${(emailContext.body || '').slice(0, 2000)}
+"""
+`
+      : '';
+
+    const prompt = `Tu es l'assistant Rédacteur d'e-mails IA officiel (inspiré de WriteMail.ai pour Gmail).
+Ta mission est de rédiger un e-mail à la perfection selon les choix de l'utilisateur.
+
+PARAMÈTRES EXIGÉS :
+- Langue obligatoire : ${targetLang}.
+ATTENTION CRUCIALE SUR LA LANGUE : Si le courriel reçu ci-dessous est en Anglais, réponds OBLIGATOIREMENT en Anglais. S'il est en Malagasy, réponds OBLIGATOIREMENT en Malagasy. S'il est en Allemand, réponds en Allemand. S'il est en Espagnol, en Espagnol. Ne réponds SURTOUT PAS arbitrairement en Français si le message d'origine ou la langue demandée est une autre langue !
+- Ton : ${tone || 'professionnel et courtois'}
+- Format/Longueur : ${lengthInstruction}
+- Destinataire : ${recipient || 'Non spécifié'}
+- Consigne utilisateur : "${userPrompt}"
+
+${contextSection}
+
+EXIGENCES :
+1. L'objet ("subject") doit être accrocheur, clair et directement rédigé dans la même langue cible requise (${targetLang}).
+2. Le corps ("body") doit comporter des salutations appropriées, une structure fluide aérée, et une formule de politesse finale élégante dans cette même langue.
+3. Si le texte est en Malagasy, utilise une grammaire et un vocabulaire malagasy impeccables (ex: "Salama tompoko", "Misaotra betsaka tamin'ny hafatra...", "Miarahaba am-panajana..."). Si en Anglais, anglais impeccable et naturel ("Hello", "Thank you for reaching out", "Best regards").
+
+Réponds UNIQUEMENT sous forme de JSON valide :
 {
-  "subject": "Objet de l'email",
-  "body": "Corps complet du message rédigé"
+  "subject": "Objet rédigé dans la langue requise",
+  "body": "Corps complet rédigé dans la langue requise"
 }`;
 
     try {
@@ -415,10 +488,11 @@ app.post('/api/ai/classify-emails', async (req, res) => {
     }));
 
     const prompt = `Tu es un classificateur d'emails précis.
-Classe chacun des emails ci-dessous dans l'une des trois catégories exactes :
+Classe chacun des emails ci-dessous dans l'une des quatre catégories exactes :
 1. "pro" : Emails professionnels, échanges de travail, clients, fournisseurs, factures, offres d'emploi, candidatures, projets pro.
 2. "personal" : Emails de personnes physiques privées, famille, amis, échanges personnels réels 1-à-1.
 3. "sites" : Newsletters, notifications de plateformes/services web (GitHub, LinkedIn, Twitter, Google alerts, Amazon, Uber, banques automatisées, boutiques e-commerce, confirmation de commandes, réseaux sociaux, abonnements).
+4. "other" : Courriers divers, notifications système/administratives, réinitialisation de mots de passe, messages automatiques et autres non classés.
 
 Liste des emails :
 ${JSON.stringify(emailSummaries, null, 2)}
@@ -426,8 +500,8 @@ ${JSON.stringify(emailSummaries, null, 2)}
 Réponds UNIQUEMENT avec un JSON contenant un dictionnaire id -> categorie :
 {
   "classifications": {
-    "email_id_1": "pro" | "personal" | "sites",
-    "email_id_2": "pro" | "personal" | "sites"
+    "email_id_1": "pro" | "personal" | "sites" | "other",
+    "email_id_2": "pro" | "personal" | "sites" | "other"
   }
 }`;
 
@@ -466,14 +540,27 @@ Réponds UNIQUEMENT avec un JSON contenant un dictionnaire id -> categorie :
 
 // Vite middleware for development & static file serving for production
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isProduction = process.env.NODE_ENV === 'production' || hasDist;
+
+  if (!isProduction) {
+    try {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.warn('Vite dev middleware init failed, falling back to static build:', viteErr);
+      if (hasDist) {
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+      }
+    }
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
@@ -481,7 +568,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);
   });
 }
 

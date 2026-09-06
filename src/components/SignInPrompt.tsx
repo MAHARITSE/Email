@@ -15,19 +15,21 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
   const [copyBlocked, setCopyBlocked] = useState(false);
   const domainCodeRef = useRef<HTMLElement | null>(null);
 
-  const isDomainError = !!error && error.startsWith('Domaine non autorisé');
+  const isDomainError = !!error && (error.startsWith('Domaine non autorisé') || error.includes('origin_mismatch') || error.includes('Origine JavaScript'));
   const currentDomain = typeof window !== 'undefined' ? window.location.hostname : '';
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const firebaseSettingsUrl = `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`;
   const gcpCredentialsUrl = `https://console.cloud.google.com/apis/credentials?project=${firebaseConfig.projectId}`;
 
   const copyDomain = async () => {
     setCopyBlocked(false);
-    const ok = await copyToClipboard(currentDomain);
+    const targetText = error?.includes('origin_mismatch') || error?.includes('Origine') ? currentOrigin : currentDomain;
+    const ok = await copyToClipboard(targetText);
     if (ok) {
       setDomainCopied(true);
       setTimeout(() => setDomainCopied(false), 2000);
     } else {
-      // Copie automatique bloquée (iframe) : on sélectionne le domaine pour Ctrl+C
+      // Copie automatique bloquée (iframe) : on sélectionne le texte pour Ctrl+C
       selectElementText(domainCodeRef.current);
       setCopyBlocked(true);
     }
@@ -52,7 +54,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] animate-pulse"></span>
               <h1 className="text-base sm:text-lg font-bold font-mono tracking-tight text-white uppercase">
-                GMAIL-PRO // NODE
+                GMAIL-PRO
               </h1>
             </div>
             <p className="text-[11px] text-slate-400 font-mono line-clamp-1">
@@ -68,7 +70,17 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
               <AlertCircle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
               <div className="flex-1">
                 <span className="font-semibold text-amber-200 uppercase tracking-wide">
-                  Session expirée :
+                  {error.includes('fermée') || error.includes('fermé')
+                    ? 'Fenêtre de connexion fermée :'
+                    : error.includes('bloquée') || error.includes('bloqué')
+                    ? 'Popup bloquée :'
+                    : error.includes('ACCES_DENIED') || error.includes('access_denied')
+                    ? 'Erreur 403 : Accès refusé (Mode Test)'
+                    : error.includes('Domaine non autorisé')
+                    ? 'Domaine non autorisé :'
+                    : error.includes('expiré') || error.includes('expirée')
+                    ? 'Session expirée :'
+                    : 'Information de connexion :'}
                 </span>
                 <p className="mt-0.5 text-slate-200 font-sans text-xs">
                   {error}
@@ -76,19 +88,54 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
               </div>
             </div>
 
-            {/* Aide spécifique : domaine non autorisé Firebase Auth */}
-            {isDomainError && currentDomain && (
+            {/* Aide spécifique : Erreur 403 access_denied / Utilisateurs de test */}
+            {(error.includes('access_denied') || error.includes('ACCES_DENIED') || error.includes('Utilisateurs de test')) && (
+              <div className="mt-3 rounded-lg bg-slate-900/90 border border-amber-500/50 p-3 space-y-2.5 text-xs font-sans">
+                <div className="flex items-center gap-2 font-bold text-amber-300">
+                  <ShieldCheck className="h-4 w-4 text-amber-400 shrink-0" />
+                  <span>Procédure pour débloquer l'accès :</span>
+                </div>
+                <p className="text-slate-300 text-[11px] leading-relaxed">
+                  L'application Google OAuth est en cours de test. Google exige que les adresses e-mail autorisées soient explicitement déclarées comme testeurs.
+                </p>
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-200 leading-relaxed font-sans">
+                  <li>
+                    Ouvrez{' '}
+                    <a
+                      href={`https://console.cloud.google.com/apis/credentials/consent?project=${firebaseConfig.projectId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 underline font-semibold inline-flex items-center gap-1"
+                    >
+                      Google Cloud Console → Écran de consentement OAuth
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </li>
+                  <li>Allez dans la section <strong>« Utilisateurs de test »</strong> (Test users).</li>
+                  <li>Cliquez sur <strong>« + ADD USERS »</strong> (Ajouter des utilisateurs).</li>
+                  <li>Ajoutez l'adresse e-mail demandée (ex: <code className="bg-slate-800 text-cyan-300 px-1 py-0.5 rounded font-mono">salfa.tulear@gmail.com</code>) puis cliquez sur Enregistrer.</li>
+                  <li>Revenez sur cette page et cliquez à nouveau sur le bouton ci-dessous.</li>
+                </ol>
+              </div>
+            )}
+
+            {/* Aide spécifique : domaine ou origine non autorisée */}
+            {isDomainError && (
               <div className="mt-3 rounded-lg bg-slate-900/70 border border-slate-700/60 p-3 space-y-2.5">
                 <div className="flex items-center gap-2 text-[11px] text-slate-300">
                   <Globe className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
-                  <span>Domaine actuel à autoriser :</span>
+                  <span>
+                    {error?.includes('origin_mismatch') || error?.includes('Origine')
+                      ? 'Origine JavaScript à autoriser :'
+                      : 'Domaine actuel à autoriser :'}
+                  </span>
                   <code
                     ref={domainCodeRef}
                     className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 font-mono text-[11px] break-all select-all cursor-text"
-                    title="Cliquez pour sélectionner le domaine"
+                    title="Cliquez pour sélectionner"
                     onClick={(e) => selectElementText(e.currentTarget)}
                   >
-                    {currentDomain}
+                    {error?.includes('origin_mismatch') || error?.includes('Origine') ? currentOrigin : currentDomain}
                   </code>
                   <button
                     type="button"
@@ -165,7 +212,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
             type="button"
             onClick={onSignIn}
             disabled={isLoading}
-            className="group relative flex w-full items-center justify-center gap-3 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-5 py-3 text-xs font-mono font-bold uppercase tracking-wider text-cyan-300 shadow-[0_0_20px_rgba(34,211,238,0.15)] transition hover:bg-cyan-500/20 hover:border-cyan-400 hover:text-white hover:shadow-[0_0_25px_rgba(34,211,238,0.25)] active:scale-[0.98] disabled:opacity-50"
+            className="group relative flex w-full items-center justify-center gap-3 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-5 py-3 text-xs font-mono font-bold uppercase tracking-wider text-cyan-300 shadow-[0_0_20px_rgba(34,211,238,0.15)] transition hover:bg-cyan-500/20 hover:border-cyan-400 hover:text-white hover:shadow-[0_0_25px_rgba(34,211,238,0.25)] active:scale-[0.98] disabled:opacity-50 cursor-pointer"
           >
             <div className="h-4 w-4 shrink-0">
               <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="h-full w-full">
@@ -184,17 +231,6 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
                 : 'S\'authentifier avec Google'}
             </span>
           </button>
-
-          <a
-            id="open-in-new-tab-link"
-            href={typeof window !== 'undefined' ? window.location.href : '#'}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2 w-full text-xs font-mono text-slate-400 hover:text-cyan-300 border border-slate-800 hover:border-cyan-500/40 bg-slate-900/40 hover:bg-slate-900/80 py-2 px-4 rounded-lg transition-colors"
-          >
-            <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Ouvrir dans un nouvel onglet</span>
-          </a>
         </div>
 
         {/* Toggleable Details & Troubleshooting Section */}
@@ -235,17 +271,12 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
                 <span className="font-semibold text-cyan-300">Solutions :</span>
                 <ul className="list-disc list-inside mt-1 space-y-0.5 text-slate-300">
                   <li>Gardez la fenêtre popup ouverte pendant la connexion.</li>
-                  <li>Si la popup est bloquée, utilisez le bouton « Ouvrir dans un nouvel onglet ».</li>
                   <li>Désactivez temporairement les bloqueurs de fenêtres surgissantes.</li>
                 </ul>
               </div>
             </div>
           )}
         </div>
-
-        <p className="text-center text-[10px] font-mono text-slate-500 pt-1">
-          OAuth 2.0 direct. Les jetons restent en mémoire locale.
-        </p>
       </div>
 
       {/* Crédit créateur */}
