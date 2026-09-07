@@ -252,6 +252,16 @@ export const EmailList: React.FC<EmailListProps> = ({
     );
   }, [emails, emailCategories, selectedLabelId, selectedLabelName, currentUserEmail, contactsVersion]);
 
+  // Keep bulk selection in sync when a page, folder or filter changes.
+  // Without this, actions could target threads that are no longer visible.
+  useEffect(() => {
+    const visibleIds = new Set(threadGroups.map((thread) => thread.id));
+    setSelectedThreadIds((current) => {
+      const next = new Set([...current].filter((id) => visibleIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [threadGroups]);
+
   // Counts for categories in thread list
   const categoryCounts = useMemo(() => {
     const counts = { pro: 0, personal: 0, sites: 0, other: 0 };
@@ -708,8 +718,8 @@ export const EmailList: React.FC<EmailListProps> = ({
             >
               {selectedCategory !== 'all'
                 ? `Aucune discussion dans la catégorie "${CATEGORIES[selectedCategory]?.label || selectedCategory}".`
-                : filterType !== 'all'
-                ? `Aucune discussion ne correspond au filtre "${filterType === 'unread' ? 'Non lus' : 'Suivis'}".`
+                : currentFilter !== 'all'
+                ? `Aucune discussion ne correspond au filtre "${currentFilter === 'unread' ? 'Non lus' : 'Suivis'}".`
                 : `Les courriels et discussions s'afficheront ici.`}
             </p>
           </div>
@@ -725,7 +735,7 @@ export const EmailList: React.FC<EmailListProps> = ({
                 key={thread.id}
                 id={`thread-row-${thread.id}`}
                 onClick={() => onSelectEmail(latest)}
-                className={`group flex items-center gap-3 px-4 py-2.5 text-xs transition cursor-pointer select-none border-l-2 relative ${
+                className={`group flex items-center gap-2 px-2 py-3 text-xs transition cursor-pointer select-none border-l-2 relative sm:gap-3 sm:px-4 sm:py-2.5 ${
                   isSelected
                     ? isDark
                       ? 'bg-cyan-950/30 border-cyan-400 text-cyan-200'
@@ -789,6 +799,7 @@ export const EmailList: React.FC<EmailListProps> = ({
                     {thread.category === 'pro' && <Briefcase className="h-3.5 w-3.5 shrink-0" />}
                     {thread.category === 'personal' && <User className="h-3.5 w-3.5 shrink-0" />}
                     {thread.category === 'sites' && <Globe className="h-3.5 w-3.5 shrink-0" />}
+                    {thread.category === 'other' && <Layers className="h-3.5 w-3.5 shrink-0" />}
                   </button>
 
                   {/* Manual category dropdown */}
@@ -844,7 +855,7 @@ export const EmailList: React.FC<EmailListProps> = ({
 
                 {/* Senders or Recipient Summary + Thread Count Badge */}
                 {thread.isSentThread ? (
-                  <div className="w-36 sm:w-48 shrink-0 flex items-center gap-1.5 truncate">
+                  <div className="w-24 sm:w-48 shrink-0 flex items-center gap-1.5 truncate">
                     <span
                       className={`truncate text-xs ${
                         thread.isUnread
@@ -873,7 +884,7 @@ export const EmailList: React.FC<EmailListProps> = ({
                     )}
                   </div>
                 ) : (
-                  <div className="w-36 sm:w-44 shrink-0 flex items-center gap-1.5 truncate">
+                  <div className="w-24 sm:w-44 shrink-0 flex items-center gap-1.5 truncate">
                     <span
                       className={`truncate ${
                         thread.isUnread
@@ -967,7 +978,7 @@ export const EmailList: React.FC<EmailListProps> = ({
                 </div>
 
                 {/* Date */}
-                <div className="w-20 text-right shrink-0 group-hover:hidden sm:group-hover:inline">
+                <div className="w-16 sm:w-20 text-right shrink-0 group-hover:hidden sm:group-hover:inline">
                   <span
                     className={`text-[11px] font-mono ${
                       thread.isUnread

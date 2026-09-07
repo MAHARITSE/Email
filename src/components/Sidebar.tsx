@@ -102,14 +102,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const content = (
     <div
-      className={`flex h-full flex-col border-r select-none transition-colors ${
+      className={`flex h-full min-h-0 flex-col border-r select-none transition-colors ${
         isDark
           ? 'bg-[#080B10] border-slate-800 text-slate-400'
           : 'bg-white border-slate-200 text-slate-600'
       }`}
     >
       {/* Compose Button */}
-      <div className="p-4">
+      <div className="border-b border-inherit p-3 sm:p-4">
         <button
           id="sidebar-compose-button"
           type="button"
@@ -303,7 +303,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Desktop Sidebar */}
       <aside
         id="desktop-sidebar"
-        className="hidden md:block w-64 shrink-0 h-[calc(100vh-64px)]"
+        className="hidden md:block h-full min-h-0 w-64 shrink-0"
       >
         {content}
       </aside>

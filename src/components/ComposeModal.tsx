@@ -175,7 +175,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
           ? 'inset-0'
           : isMinimized
           ? 'bottom-0 right-4 sm:right-10 w-72 sm:w-80 h-12 shadow-2xl'
-          : 'bottom-0 right-2 sm:right-8 w-full max-w-2xl h-[640px] shadow-2xl rounded-t-xl'
+          : 'bottom-0 right-2 sm:right-8 w-[calc(100%-1rem)] sm:w-full max-w-2xl h-[640px] max-h-[calc(100dvh-1rem)] shadow-2xl rounded-t-xl'
       }`}
     >
       <form

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Send, Trash2, X } from 'lucide-react';
 import { ConfirmationDialogState } from '../types/gmail';
+import { useTheme } from '../context/ThemeContext';
 
 interface ConfirmationModalProps {
   dialog: ConfirmationDialogState | null;
@@ -8,7 +9,17 @@ interface ConfirmationModalProps {
 }
 
 export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ dialog, onClose }) => {
+  const { isDark } = useTheme();
   const [isProcessing, setIsProcessing] = useState(false);
+
+  useEffect(() => {
+    if (!dialog?.isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isProcessing) onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [dialog?.isOpen, isProcessing, onClose]);
 
   if (!dialog || !dialog.isOpen) return null;
 
@@ -33,14 +44,21 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ dialog, on
   return (
     <div
       id="confirmation-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md transition-opacity"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm transition-opacity"
       role="dialog"
       aria-modal="true"
       aria-labelledby="dialog-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !isProcessing) onClose();
+      }}
     >
       <div
         id="confirmation-modal-card"
-        className="w-full max-w-md transform overflow-hidden rounded-2xl bg-[#080B10] p-6 shadow-[0_0_50px_rgba(0,0,0,0.9)] transition-all border border-slate-800 text-slate-300"
+        className={`w-full max-w-md transform overflow-hidden rounded-2xl p-6 shadow-2xl transition-all border ${
+          isDark
+            ? 'bg-[#080B10] border-slate-800 text-slate-300'
+            : 'bg-white border-slate-200 text-slate-700'
+        }`}
       >
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -61,7 +79,7 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ dialog, on
                 <AlertTriangle className="h-5 w-5" />
               )}
             </div>
-            <h3 id="dialog-title" className="text-base sm:text-lg font-bold font-mono tracking-tight text-white">
+            <h3 id="dialog-title" className={`text-base sm:text-lg font-bold font-mono tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
               {dialog.title}
             </h3>
           </div>
@@ -69,13 +87,13 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ dialog, on
             id="close-confirmation-modal-btn"
             onClick={onClose}
             disabled={isProcessing}
-            className="rounded-lg p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-300 transition"
+            className={`rounded-lg p-1 transition ${isDark ? 'text-slate-500 hover:bg-slate-800 hover:text-slate-300' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'}`}
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <p className="mt-3 text-xs sm:text-sm leading-relaxed text-slate-400 whitespace-pre-line font-mono">
+        <p className={`mt-3 text-xs sm:text-sm leading-relaxed whitespace-pre-line font-mono ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
           {dialog.message}
         </p>
 
@@ -85,7 +103,7 @@ export const ConfirmationModal: React.FC<ConfirmationModalProps> = ({ dialog, on
             type="button"
             onClick={onClose}
             disabled={isProcessing}
-            className="rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-2 text-xs font-mono font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition disabled:opacity-50"
+            className={`rounded-lg border px-4 py-2 text-xs font-mono font-medium transition disabled:opacity-50 ${isDark ? 'border-slate-800 bg-slate-900/60 text-slate-300 hover:bg-slate-800 hover:text-white' : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 hover:text-slate-900'}`}
           >
             Annuler
           </button>

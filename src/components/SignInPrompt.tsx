@@ -2,6 +2,8 @@ import React, { useRef, useState } from 'react';
 import { Mail, ShieldCheck, Inbox, Search, Sparkles, ExternalLink, AlertCircle, ChevronDown, ChevronUp, Copy, Check, Globe } from 'lucide-react';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { copyToClipboard, selectElementText } from '../utils/clipboard';
+import { ThemeToggle } from './ThemeToggle';
+import { useTheme } from '../context/ThemeContext';
 
 interface SignInPromptProps {
   onSignIn: () => void;
@@ -10,6 +12,7 @@ interface SignInPromptProps {
 }
 
 export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading, error }) => {
+  const { isDark } = useTheme();
   const [showHelpDetails, setShowHelpDetails] = useState(false);
   const [domainCopied, setDomainCopied] = useState(false);
   const [copyBlocked, setCopyBlocked] = useState(false);
@@ -38,22 +41,30 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
   return (
     <div
       id="signin-prompt-container"
-      className="relative flex min-h-screen w-full flex-col items-center justify-center bg-[#05070A] px-4 py-6 sm:py-10 text-slate-300 overflow-y-auto select-none"
+      className={`relative flex min-h-screen w-full flex-col items-center justify-center px-4 py-6 text-slate-300 sm:py-10 overflow-y-auto select-none ${isDark ? 'bg-[#05070A]' : 'bg-slate-100 text-slate-700'}`}
     >
       {/* Ambient background glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-cyan-500/10 blur-[120px] rounded-full pointer-events-none" />
       <div className="absolute bottom-10 right-10 w-72 h-72 bg-blue-600/10 blur-[100px] rounded-full pointer-events-none" />
 
-      <div className="relative w-full max-w-md my-auto rounded-2xl border border-slate-800 bg-[#080B10]/95 backdrop-blur-xl p-5 sm:p-6 shadow-[0_0_50px_rgba(0,0,0,0.9)] z-10 space-y-4">
+      <div className={`relative z-10 my-auto w-full max-w-md space-y-4 rounded-2xl border p-5 shadow-2xl backdrop-blur-xl sm:p-6 ${
+        isDark
+          ? 'border-slate-800 bg-[#080B10]/95 shadow-[0_0_50px_rgba(0,0,0,0.9)]'
+          : 'border-slate-200 bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.12)]'
+      }`}>
+        <div className={`flex items-center justify-between rounded-xl border px-3 py-2 text-[10px] font-mono ${isDark ? 'border-cyan-500/20 bg-cyan-950/20 text-cyan-300' : 'border-cyan-200 bg-cyan-50 text-cyan-800'}`}>
+          <span className="flex items-center gap-2"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Connexion sécurisée</span>
+          <span className="tracking-wider">OAUTH 2.0</span>
+        </div>
         {/* Header */}
-        <div className="flex items-center gap-3 border-b border-slate-800/80 pb-3">
+          <div className={`flex items-center gap-3 border-b pb-3 ${isDark ? 'border-slate-800/80' : 'border-slate-200'}`}>
           <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.2)] shrink-0">
             <Mail className="h-5 w-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee] animate-pulse"></span>
-              <h1 className="text-base sm:text-lg font-bold font-mono tracking-tight text-white uppercase">
+              <h1 className={`text-base sm:text-lg font-bold font-mono tracking-tight uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>
                 GMAIL-PRO
               </h1>
             </div>
@@ -65,7 +76,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
 
         {/* Error / Expiration Notification */}
         {error && (
-          <div className="rounded-xl bg-amber-950/40 p-3 text-xs font-mono text-amber-300 border border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)]">
+          <div aria-live="polite" className="rounded-xl bg-amber-950/40 p-3 text-xs font-mono text-amber-300 border border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)]">
             <div className="flex items-start gap-2">
               <AlertCircle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
               <div className="flex-1">
@@ -280,10 +291,10 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
       </div>
 
       {/* Crédit créateur */}
-      <div className="relative z-10 mt-5 flex flex-col items-center gap-1 text-center">
+      <div className={`relative z-10 mt-5 flex flex-col items-center gap-1 text-center ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
         <p className="text-[11px] font-mono text-slate-500">
           Conçu et développé par{' '}
-          <span className="font-semibold text-slate-300">MAHARITSE Hyacinthe Bertrand</span>
+          <span className={`font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>MAHARITSE Hyacinthe Bertrand</span>
         </p>
         <div className="flex items-center gap-3 text-[10px] font-mono">
           <a
@@ -302,6 +313,8 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
           </a>
         </div>
       </div>
+
+      <ThemeToggle />
     </div>
   );
 };
