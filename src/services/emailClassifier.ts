@@ -1,6 +1,6 @@
 import { ParsedEmail } from '../types/gmail';
 
-export type EmailCategory = 'all' | 'pro' | 'personal' | 'sites';
+export type EmailCategory = 'all' | 'pro' | 'personal' | 'sites' | 'other';
 
 export interface CategoryInfo {
   id: EmailCategory;
@@ -16,7 +16,7 @@ export interface CategoryInfo {
   iconName: string;
 }
 
-export const CATEGORIES: Record<'pro' | 'personal' | 'sites', CategoryInfo> = {
+export const CATEGORIES: Record<'pro' | 'personal' | 'sites' | 'other', CategoryInfo> = {
   pro: {
     id: 'pro',
     label: 'Professionnels',
@@ -55,6 +55,19 @@ export const CATEGORIES: Record<'pro' | 'personal' | 'sites', CategoryInfo> = {
     bgDark: 'bg-violet-500/10',
     bgLight: 'bg-violet-50',
     iconName: 'Globe',
+  },
+  other: {
+    id: 'other',
+    label: 'Autres & Divers',
+    shortLabel: 'Autres',
+    description: 'Notifications système, démarches administratives & courriers divers',
+    colorDark: 'text-amber-400',
+    colorLight: 'text-amber-700',
+    borderDark: 'border-amber-500/30',
+    borderLight: 'border-amber-200',
+    bgDark: 'bg-amber-500/10',
+    bgLight: 'bg-amber-50',
+    iconName: 'Layers',
   },
 };
 
@@ -157,7 +170,7 @@ const PERSONAL_DOMAINS = [
 ];
 
 // Local storage manual user overrides
-function getManualOverrides(): Record<string, 'pro' | 'personal' | 'sites'> {
+function getManualOverrides(): Record<string, 'pro' | 'personal' | 'sites' | 'other'> {
   try {
     const raw = localStorage.getItem('gmail_category_overrides');
     return raw ? JSON.parse(raw) : {};
@@ -168,7 +181,7 @@ function getManualOverrides(): Record<string, 'pro' | 'personal' | 'sites'> {
 
 export function setManualCategory(
   emailId: string,
-  category: 'pro' | 'personal' | 'sites'
+  category: 'pro' | 'personal' | 'sites' | 'other'
 ) {
   try {
     const current = getManualOverrides();
@@ -180,7 +193,7 @@ export function setManualCategory(
 }
 
 // Deterministic fast classifier
-export function classifyEmailFast(email: ParsedEmail): 'pro' | 'personal' | 'sites' {
+export function classifyEmailFast(email: ParsedEmail): 'pro' | 'personal' | 'sites' | 'other' {
   // 1. Manual user override
   const overrides = getManualOverrides();
   if (overrides[email.id]) {
@@ -223,14 +236,35 @@ export function classifyEmailFast(email: ParsedEmail): 'pro' | 'personal' | 'sit
     return 'pro';
   }
 
-  // 4. Default for normal direct personal accounts
-  return 'personal';
+  // 4. Check for system or notification / administrative emails that belong to 'other'
+  const isOtherNotification =
+    fromEmail.includes('admin') ||
+    fromEmail.includes('securit') ||
+    fromEmail.includes('auth') ||
+    fromEmail.includes('verification') ||
+    fromEmail.includes('no-reply') ||
+    subject.includes('code de confirmation') ||
+    subject.includes('sécurité') ||
+    subject.includes('mise à jour des conditions') ||
+    subject.includes('rappel') ||
+    snippet.includes('automatique');
+
+  if (isOtherNotification) {
+    return 'other';
+  }
+
+  // 5. Default for personal direct 1-to-1 accounts
+  if (isGenericPersonalDomain && fromEmail) {
+    return 'personal';
+  }
+
+  return 'other';
 }
 
 // Background batch classification via Gemini
 export async function classifyEmailsWithGemini(
   emails: ParsedEmail[]
-): Promise<Record<string, 'pro' | 'personal' | 'sites'>> {
+): Promise<Record<string, 'pro' | 'personal' | 'sites' | 'other'>> {
   if (emails.length === 0) return {};
 
   try {
@@ -256,7 +290,7 @@ export async function classifyEmailsWithGemini(
   }
 
   // Fallback to fast
-  const fallback: Record<string, 'pro' | 'personal' | 'sites'> = {};
+  const fallback: Record<string, 'pro' | 'personal' | 'sites' | 'other'> = {};
   emails.forEach((e) => {
     fallback[e.id] = classifyEmailFast(e);
   });
@@ -265,7 +299,7 @@ export async function classifyEmailsWithGemini(
 
 const STORAGE_KEY = 'gmail_email_categories_v1';
 
-export function loadManualOverrides(): Record<string, 'pro' | 'personal' | 'sites'> {
+export function loadManualOverrides(): Record<string, 'pro' | 'personal' | 'sites' | 'other'> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
@@ -275,7 +309,7 @@ export function loadManualOverrides(): Record<string, 'pro' | 'personal' | 'site
   return {};
 }
 
-export function saveManualOverride(emailId: string, category: 'pro' | 'personal' | 'sites') {
+export function saveManualOverride(emailId: string, category: 'pro' | 'personal' | 'sites' | 'other') {
   try {
     const current = loadManualOverrides();
     current[emailId] = category;

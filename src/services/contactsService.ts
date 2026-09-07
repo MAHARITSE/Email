@@ -112,6 +112,47 @@ export function getFavoriteContacts(): LocalContact[] {
   return getLocalContacts().filter((c) => Boolean(c.isFavorite));
 }
 
+/**
+ * Find a contact in the local carnet de contacts by email address.
+ */
+export function findContactByEmail(email: string | undefined | null): LocalContact | undefined {
+  if (!email) return undefined;
+  const clean = email.toLowerCase().trim();
+  const contacts = getLocalContacts();
+  return contacts.find((c) => c.email.toLowerCase().trim() === clean);
+}
+
+/**
+ * Verify and resolve a person's display name using the carnet de contact first.
+ * If the person is saved in the contacts book, their configured name is used.
+ * Otherwise, falls back to the provided name or email username.
+ */
+export function resolveContactDisplayName(
+  email: string | undefined | null,
+  fallbackName?: string | null
+): string {
+  if (!email && !fallbackName) return '';
+  const cleanEmail = (email || '').toLowerCase().trim();
+  
+  if (cleanEmail) {
+    const contact = findContactByEmail(cleanEmail);
+    if (contact && contact.name && contact.name.trim()) {
+      return contact.name.trim();
+    }
+  }
+
+  const cleanFallback = (fallbackName || '').trim();
+  if (cleanFallback && cleanFallback.toLowerCase() !== 'moi' && cleanFallback.toLowerCase() !== cleanEmail) {
+    return cleanFallback;
+  }
+
+  if (cleanEmail && cleanEmail.includes('@')) {
+    return cleanEmail.split('@')[0];
+  }
+
+  return cleanFallback || cleanEmail;
+}
+
 export function isContactFavorite(emailOrId: string): boolean {
   if (!emailOrId) return false;
   const target = emailOrId.toLowerCase().trim();

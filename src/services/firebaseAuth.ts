@@ -79,8 +79,8 @@ export const getAuthErrorMessage = (error: any): string => {
   if (code === 'auth/popup-blocked' || message.includes('popup-blocked')) {
     return 'La fenêtre contextuelle de connexion a été bloquée par votre navigateur. Veuillez autoriser les fenêtres popups pour ce site, ou ouvrir l\'application dans un nouvel onglet.';
   }
-  if (code === 'auth/cancelled-popup-request' || message.includes('cancelled-popup-request')) {
-    return 'La tentative d\'authentification a été interrompue. Veuillez réessayer.';
+  if (code === 'auth/cancelled-popup-request' || message.includes('cancelled-popup-request') || message.includes('Pending promise was never set')) {
+    return 'La tentative d\'authentification a été interrompue. Veuillez cliquer à nouveau sur S\'authentifier avec Google.';
   }
   if (code === 'auth/network-request-failed' || message.includes('network-request-failed')) {
     return 'Problème de connexion réseau. Veuillez vérifier votre connexion Internet et réessayer.';
@@ -89,12 +89,23 @@ export const getAuthErrorMessage = (error: any): string => {
     const host = typeof window !== 'undefined' ? window.location.hostname : 'ce domaine';
     return `Domaine non autorisé : « ${host} » n'est pas dans la liste des domaines autorisés du projet Firebase. Ajoutez-le dans Firebase Console → Authentication → Paramètres → Domaines autorisés.`;
   }
+  if (message.includes('origin_mismatch') || message.includes('400')) {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return `Origine JavaScript non autorisée (Erreur 400 origin_mismatch) : Veuillez ajouter « ${origin} » aux Origines JavaScript autorisées dans Google Cloud Console → Client OAuth 2.0.`;
+  }
+  if (code === 'auth/access-denied' || message.includes('access_denied') || message.includes('403')) {
+    return `ACCES_DENIED: L'application Google OAuth est en mode test. Seuls les comptes ajoutés aux « Utilisateurs de test » dans Google Cloud Console peuvent se connecter. Le développeur doit ajouter votre adresse e-mail dans Google Cloud Console → Écran de consentement OAuth → Utilisateurs de test.`;
+  }
 
   const cleaned = message.replace(/^Firebase:\s*Error\s*\((.*?)\)\.?$/i, '$1').trim();
   return cleaned || error?.message || 'Échec de l\'authentification avec Google. Veuillez réessayer.';
 };
 
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  if (isSigningIn) {
+    console.warn('Sign in is already in progress.');
+    return null;
+  }
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);

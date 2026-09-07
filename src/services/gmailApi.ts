@@ -254,75 +254,101 @@ export function getMockFallbackLabels(): GmailLabel[] {
 
 export function getMockFallbackEmails(): ParsedEmail[] {
   const now = Date.now();
-  return [
-    {
-      id: 'mock_msg_1',
-      threadId: 'mock_thread_1',
-      labelIds: ['INBOX', 'UNREAD'],
-      subject: 'Bienvenue sur votre messagerie intelligente',
-      fromName: 'Équipe Support',
-      fromEmail: 'support@workspace.ai',
+  const mockPeople = [
+    { name: 'Équipe Support', email: 'support@workspace.ai', subj: 'Bienvenue sur votre messagerie intelligente', isUnread: true, isStarred: true, cat: 'sites' },
+    { name: 'MAHARITSE Hyacinthe Bertrand', email: 'maharitse@gmail.com', subj: 'Point sur le projet et avancement des livrables', isUnread: true, isStarred: false, cat: 'personal' },
+    { name: 'Google Cloud Platform', email: 'no-reply@google.com', subj: 'Confirmation de votre inscription aux services cloud', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Sophie Martin', email: 'sophie.martin@entreprise-conseil.fr', subj: 'Devis et planning de déploiement Q3', isUnread: true, isStarred: true, cat: 'pro' },
+    { name: 'Jean Dupont', email: 'jean.dupont@orange.fr', subj: 'Organisation du week-end en famille', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'GitHub Notifications', email: 'notifications@github.com', subj: '[Release v2.4.0] Déploiement réussi sur production', isUnread: true, isStarred: false, cat: 'sites' },
+    { name: 'Claire Bernard', email: 'claire.bernard@gmail.com', subj: 'Photos et souvenirs des vacances', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Service Facturation EDF', email: 'contact@factures-edf.fr', subj: 'Votre facture mensuelle électricité', isUnread: false, isStarred: false, cat: 'pro' },
+    { name: 'Stripe Payments', email: 'notifications@stripe.com', subj: 'Rapport de virement bancaire mensuel', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Thomas Dubois', email: 'thomas.dubois@tech-agency.com', subj: 'Candidature développeur TypeScript / React', isUnread: true, isStarred: true, cat: 'pro' },
+    { name: 'Impôts Gouv', email: 'ne-pas-repondre@dgfip.finances.gouv.fr', subj: 'Notification : Déclaration et avis d\'imposition', isUnread: false, isStarred: false, cat: 'other' },
+    { name: 'LinkedIn', email: 'messages-noreply@linkedin.com', subj: 'Vous avez 5 nouvelles consultations de profil', isUnread: true, isStarred: false, cat: 'sites' },
+    { name: 'Alexandre Moreau', email: 'alexandre.moreau@cabinet-avocat.com', subj: 'Validation du contrat de prestation de services', isUnread: false, isStarred: true, cat: 'pro' },
+    { name: 'Camille Roux', email: 'camille.roux@yahoo.fr', subj: 'Invitation déjeuner vendredi midi', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Banque Postale Alerte', email: 'alerte-securite@labanquepostale.fr', subj: 'Code de sécurité pour confirmation de virement', isUnread: false, isStarred: false, cat: 'other' },
+    { name: 'Julien Lefebvre', email: 'julien.lefebvre@saas-studio.io', subj: 'Revue d\'architecture et tests de montée en charge', isUnread: true, isStarred: false, cat: 'pro' },
+    { name: 'Amazon.fr', email: 'auto-confirm@amazon.fr', subj: 'Expédition de votre commande n° 402-9918273', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Nathalie Garcia', email: 'nathalie.garcia@outlook.com', subj: 'Nouvelles de la rentrée et planning', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Figma Team', email: 'news@figma.com', subj: 'Nouvelles fonctionnalités de design system collaboratif', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Nicolas Petit', email: 'nicolas.petit@solutions-web.com', subj: 'Compte-rendu de la réunion client du 3 septembre', isUnread: false, isStarred: false, cat: 'pro' },
+    { name: 'SNCF Connect', email: 'billet-confirmation@sncf-connect.com', subj: 'Vos e-billets TGV Paris - Lyon', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Élodie Mercier', email: 'elodie.mercier@free.fr', subj: 'Recommandation de livre et article technique', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Doctolib', email: 'rappel-rdv@doctolib.fr', subj: 'Rappel de votre rendez-vous médical', isUnread: false, isStarred: false, cat: 'other' },
+    { name: 'Antoine Laurent', email: 'antoine.laurent@cloud-consulting.eu', subj: 'Proposition commerciale infogérance serveurs', isUnread: true, isStarred: false, cat: 'pro' },
+    { name: 'Spotify Music', email: 'no-reply@spotify.com', subj: 'Votre récapitulatif musical de la semaine', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Mathieu Bonnet', email: 'mathieu.bonnet@sfr.fr', subj: 'Sortie vélo et entraînement ce dimanche', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'OVHcloud Support', email: 'support@ovhcloud.com', subj: 'Renouvellement automatique de votre nom de domaine', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Sarah Benali', email: 'sarah.benali@fintech-corp.com', subj: 'Audit de sécurité des API et conformité RGPD', isUnread: true, isStarred: true, cat: 'pro' },
+    { name: 'Service Public Authentification', email: 'authentification@franceconnect.gouv.fr', subj: 'Connexion à votre espace personnel FranceConnect', isUnread: false, isStarred: false, cat: 'other' },
+    { name: 'Lucas Girard', email: 'lucas.girard@gmail.com', subj: 'Re: Covoiturage et horaires pour le congrès', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Notion Team', email: 'team@m.notion.so', subj: 'Workspace updates: New formula syntax is live', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Valérie Rousseau', email: 'valerie.rousseau@cabinet-comptable.fr', subj: 'Transmission des pièces comptables du trimestre', isUnread: true, isStarred: false, cat: 'pro' },
+    { name: 'Slack Notifications', email: 'notifications@slack.com', subj: 'Nouveaux messages dans le canal #projet-refonte', isUnread: true, isStarred: false, cat: 'sites' },
+    { name: 'Pierre Simon', email: 'pierre.simon@laposte.net', subj: 'Invitation à l\'anniversaire de Chloé', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Uber Receipts', email: 'uber.france@uber.com', subj: 'Votre course Uber d\'hier soir', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Guillaume Fournier', email: 'guillaume.fournier@agence-digitale.fr', subj: 'Maquettes UI/UX validées pour la messagerie', isUnread: false, isStarred: true, cat: 'pro' },
+    { name: 'Ameli Assurance Maladie', email: 'ne-pas-repondre@assurance-maladie.fr', subj: 'Nouveau relevé de remboursement disponible', isUnread: false, isStarred: false, cat: 'other' },
+    { name: 'Audrey Lambert', email: 'audrey.lambert@gmail.com', subj: 'Réservation de la maison pour les vacances', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Vercel Deployment', email: 'notifications@vercel.com', subj: 'Production deployment ready for branch main', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Romain Michel', email: 'romain.michel@software-house.com', subj: 'Synthèse des tests unitaires et intégration continue', isUnread: true, isStarred: false, cat: 'pro' },
+    { name: 'Deliveroo', email: 'info@deliveroo.fr', subj: 'Confirmation de commande et suivi du livreur', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Céline Leroy', email: 'celine.leroy@outlook.fr', subj: 'Re: Partage de documents et notes de cours', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Service Carte Bancaire', email: 'alerte-securite@banque-en-ligne.fr', subj: 'Mise à jour des règles de sécurité bancaire 3D Secure', isUnread: false, isStarred: false, cat: 'other' },
+    { name: 'Maxime David', email: 'maxime.david@ingenierie-systemes.fr', subj: 'Compte-rendu de réunion d\'avancement technique', isUnread: false, isStarred: false, cat: 'pro' },
+    { name: 'Medium Daily Digest', email: 'noreply@medium.com', subj: 'Top stories in TypeScript, AI, and System Design', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Béatrice Fontaine', email: 'beatrice.fontaine@orange.fr', subj: 'Recette de famille et nouvelles des enfants', isUnread: false, isStarred: false, cat: 'personal' },
+    { name: 'Cloudflare Notifications', email: 'no-reply@cloudflare.com', subj: 'SSL/TLS Certificate successfully issued', isUnread: false, isStarred: false, cat: 'sites' },
+    { name: 'Florian Chevalier', email: 'florian.chevalier@data-metrics.io', subj: 'Tableau de bord des statistiques d\'utilisation', isUnread: true, isStarred: false, cat: 'pro' },
+    { name: 'Google Security', email: 'no-reply@accounts.google.com', subj: 'Alerte de sécurité : Nouvel appareil connecté', isUnread: false, isStarred: false, cat: 'other' },
+    { name: 'Isabelle Fabre', email: 'isabelle.fabre@gmail.com', subj: 'Confirmation de présence pour la réunion de quartier', isUnread: false, isStarred: false, cat: 'personal' },
+  ];
+
+  return mockPeople.map((p, idx) => {
+    const msgId = `mock_msg_${idx + 1}`;
+    const threadId = `mock_thread_${idx + 1}`;
+    const timeOffset = idx * 3600000 * 2.5;
+    const internalDate = String(now - timeOffset);
+    const dateStr = idx === 0 ? "Aujourd'hui, 08:30" : idx === 1 ? 'Hier, 14:15' : `${Math.max(1, 30 - idx)} août`;
+    const labelIds = ['INBOX'];
+    if (p.isUnread) labelIds.push('UNREAD');
+    if (p.isStarred) labelIds.push('STARRED');
+
+    return {
+      id: msgId,
+      threadId,
+      labelIds,
+      subject: p.subj,
+      fromName: p.name,
+      fromEmail: p.email,
       to: 'maharitse@gmail.com',
       cc: '',
-      dateStr: "Aujourd'hui, 08:30",
-      internalDate: String(now - 3600000),
-      snippet: 'Bienvenue dans votre nouvel espace de messagerie propulsé par l’IA. Retrouvez vos contacts, vos signatures et vos résumés intelligents.',
-      bodyHtml: '<div style="font-family:sans-serif; padding:16px;"><h2>Bienvenue sur votre messagerie intelligente</h2><p>Bienvenue dans votre nouvel espace de messagerie propulsé par l’IA. Retrouvez vos contacts, vos signatures personnalisées et vos résumés intelligents.</p><p>Cordialement,<br><strong>L’équipe Support</strong></p></div>',
-      bodyText: 'Bienvenue sur votre messagerie intelligente.\n\nBienvenue dans votre nouvel espace de messagerie propulsé par l’IA. Retrouvez vos contacts, vos signatures personnalisées et vos résumés intelligents.\n\nCordialement,\nL’équipe Support',
-      isUnread: true,
-      isStarred: true,
-      attachments: [],
-    },
-    {
-      id: 'mock_msg_2',
-      threadId: 'mock_thread_2',
-      labelIds: ['INBOX', 'UNREAD'],
-      subject: 'Point sur le projet et avancement des livrables',
-      fromName: 'MAHARITSE Hyacinthe Bertrand',
-      fromEmail: 'maharitse@gmail.com',
-      to: 'equipe@workspace.ai',
-      cc: 'direction@workspace.ai',
-      dateStr: "Hier, 14:15",
-      internalDate: String(now - 86400000),
-      snippet: 'Bonjour à tous, voici le point sur les derniers livrables et la synchronisation des contacts.',
-      bodyHtml: '<div style="font-family:sans-serif; padding:16px;"><h3>Point sur le projet et avancement</h3><p>Bonjour à tous,</p><p>Voici le point sur les derniers livrables et la synchronisation des contacts. Tout progresse comme prévu.</p><p>Bien cordialement,<br><strong>Hyacinthe</strong></p></div>',
-      bodyText: 'Point sur le projet et avancement\n\nBonjour à tous,\n\nVoici le point sur les derniers livrables et la synchronisation des contacts. Tout progresse comme prévu.\n\nBien cordialement,\nHyacinthe',
-      isUnread: true,
-      isStarred: false,
-      attachments: [
+      dateStr,
+      internalDate,
+      snippet: `Bonjour, concernant : ${p.subj}. Voici les détails actualisés et le suivi des actions en cours.`,
+      bodyHtml: `<div style="font-family:sans-serif; padding:16px;"><h3>${p.subj}</h3><p>Bonjour,</p><p>Concernant votre dossier : <strong>${p.subj}</strong>. Tout progresse comme convenu.</p><p>Cordialement,<br><strong>${p.name}</strong></p></div>`,
+      bodyText: `${p.subj}\n\nBonjour,\n\nConcernant votre dossier : ${p.subj}. Tout progresse comme convenu.\n\nCordialement,\n${p.name}`,
+      isUnread: p.isUnread,
+      isStarred: p.isStarred,
+      attachments: idx === 1 ? [
         {
           id: 'att_1',
-          messageId: 'mock_msg_2',
+          messageId: msgId,
           filename: 'Rapport_Projet_2026.pdf',
           mimeType: 'application/pdf',
           size: 245000,
-          dateStr: 'Hier, 14:15',
-          internalDate: String(now - 86400000),
-          emailSubject: 'Point sur le projet et avancement des livrables',
-          fromName: 'MAHARITSE Hyacinthe Bertrand',
-          fromEmail: 'maharitse@gmail.com',
-        },
-      ],
-    },
-    {
-      id: 'mock_msg_3',
-      threadId: 'mock_thread_3',
-      labelIds: ['INBOX'],
-      subject: 'Confirmation de votre inscription aux services cloud',
-      fromName: 'Google Cloud Platform',
-      fromEmail: 'no-reply@google.com',
-      to: 'maharitse@gmail.com',
-      cc: '',
-      dateStr: '2 Sept',
-      internalDate: String(now - 172800000),
-      snippet: 'Votre compte a été provisionné avec succès sur la région europe-west2.',
-      bodyHtml: '<div style="font-family:sans-serif; padding:16px;"><h3>Google Cloud Notification</h3><p>Votre compte a été provisionné avec succès sur la région europe-west2 avec le stockage cloud sécurisé.</p></div>',
-      bodyText: 'Google Cloud Notification\n\nVotre compte a été provisionné avec succès sur la région europe-west2 avec le stockage cloud sécurisé.',
-      isUnread: false,
-      isStarred: false,
-      attachments: [],
-    },
-  ];
+          dateStr,
+          internalDate,
+          emailSubject: p.subj,
+          fromName: p.name,
+          fromEmail: p.email,
+        }
+      ] : [],
+    };
+  });
 }
 
 export async function fetchProfile(token: string): Promise<GmailProfile> {
@@ -410,8 +436,83 @@ export async function listMessages(
   params: ListMessagesParams = {}
 ): Promise<ListMessagesResponse> {
   try {
+    const threadMax = params.maxResults || 50;
+    const isSpamOrTrash =
+      params.labelIds?.some((id) => id === 'SPAM' || id === 'TRASH') ||
+      params.query?.toLowerCase().includes('spam') ||
+      params.query?.toLowerCase().includes('trash');
+
+    const threadUrl = new URL(`${GMAIL_BASE}/threads`);
+    threadUrl.searchParams.set('maxResults', String(threadMax));
+    if (isSpamOrTrash) {
+      threadUrl.searchParams.set('includeSpamTrash', 'true');
+    }
+
+    if (params.query && params.query.trim()) {
+      threadUrl.searchParams.set('q', params.query.trim());
+    }
+    if (params.labelIds && params.labelIds.length > 0) {
+      params.labelIds.forEach((id) => threadUrl.searchParams.append('labelIds', id));
+    }
+    if (params.pageToken) {
+      threadUrl.searchParams.set('pageToken', params.pageToken);
+    }
+
+    const threadRes = await fetch(threadUrl.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (threadRes.ok) {
+      const threadData = await threadRes.json();
+      const rawThreads: { id: string }[] = threadData.threads || [];
+
+      if (rawThreads.length === 0) {
+        return {
+          emails: [],
+          nextPageToken: threadData.nextPageToken,
+          resultSizeEstimate: 0,
+        };
+      }
+
+      // Fetch full thread details (each thread contains all its messages and replies)
+      const threadPromises = rawThreads.map(async (item) => {
+        try {
+          const res = await fetch(`${GMAIL_BASE}/threads/${item.id}?format=full`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) return [];
+          const threadJson = await res.json();
+          const threadMsgs: GmailRawMessage[] = threadJson.messages || [];
+          return threadMsgs.map((m) => parseRawMessage(m)).filter((m): m is ParsedEmail => m !== null);
+        } catch {
+          return [];
+        }
+      });
+
+      const threadResults = await Promise.all(threadPromises);
+      const emails = threadResults.flat();
+
+      return {
+        emails,
+        nextPageToken: threadData.nextPageToken,
+        resultSizeEstimate: threadData.resultSizeEstimate || rawThreads.length,
+      };
+    } else {
+      if (threadRes.status === 401 || threadRes.status === 403) {
+        const errJson = await threadRes.json().catch(() => null);
+        const msg = errJson?.error?.message || `Auth error (${threadRes.status})`;
+        notifyIfAuthError(threadRes.status, msg);
+        throw new Error(msg);
+      }
+    }
+
+    // Fallback to /messages if /threads was not supported
     const url = new URL(`${GMAIL_BASE}/messages`);
-    url.searchParams.set('maxResults', String(params.maxResults || 20));
+    const requestedMax = params.maxResults ? Math.min(100, Math.max(50, params.maxResults * 2)) : 100;
+    url.searchParams.set('maxResults', String(requestedMax));
+    if (isSpamOrTrash) {
+      url.searchParams.set('includeSpamTrash', 'true');
+    }
 
     if (params.query && params.query.trim()) {
       url.searchParams.set('q', params.query.trim());
@@ -472,7 +573,12 @@ export async function listMessages(
       throw err;
     }
     console.warn('Network error or failed fetch in listMessages, using mock fallback emails:', err);
-    const fallbackEmails = getMockFallbackEmails();
+    let fallbackEmails = getMockFallbackEmails();
+    if (params.query?.includes('is:unread')) {
+      fallbackEmails = fallbackEmails.filter((e) => e.isUnread);
+    } else if (params.query?.includes('is:starred')) {
+      fallbackEmails = fallbackEmails.filter((e) => e.isStarred);
+    }
     return {
       emails: fallbackEmails,
       nextPageToken: undefined,
@@ -623,7 +729,7 @@ export function buildRfc2822Raw(opts: ComposeOptions): string {
   const plainText = opts.body.replace(/<[^>]*>?/gm, '');
   lines.push(`--${boundary}`);
   lines.push('Content-Type: text/plain; charset=UTF-8');
-  lines.push('Content-Transfer-Encoding: 7bit');
+  lines.push('Content-Transfer-Encoding: 8bit');
   lines.push('');
   lines.push(plainText);
   lines.push('');
@@ -632,7 +738,7 @@ export function buildRfc2822Raw(opts: ComposeOptions): string {
   const htmlContent = opts.body.includes('<') ? opts.body : `<div style="font-family: sans-serif; font-size: 14px; line-height: 1.5; color: #222;">${opts.body.replace(/\n/g, '<br />')}</div>`;
   lines.push(`--${boundary}`);
   lines.push('Content-Type: text/html; charset=UTF-8');
-  lines.push('Content-Transfer-Encoding: 7bit');
+  lines.push('Content-Transfer-Encoding: 8bit');
   lines.push('');
   lines.push(htmlContent);
   lines.push('');

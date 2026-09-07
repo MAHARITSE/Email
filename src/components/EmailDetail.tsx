@@ -39,9 +39,14 @@ import {
   X,
   Copy,
   FolderMinus,
+  Maximize2,
+  Minimize2,
+  CalendarPlus,
+  Layers,
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { ParsedEmail, EmailAttachment } from '../types/gmail';
+import { saveAgendaTask } from '../services/agendaService';
 import {
   ComposeOptions,
   downloadAttachmentFile,
@@ -55,18 +60,24 @@ import {
   EmailCategory,
   classifyEmailFast,
 } from '../services/emailClassifier';
+import { RichTextEmailEditor } from './RichTextEmailEditor';
 import {
-  getSmartReplySuggestions,
   improveEmailText,
-  SmartReplySuggestion,
+  draftEmailWithAi,
+  detectEmailLanguage,
   ImproveAction,
+  AiLanguage,
+  AiTone,
 } from '../services/aiAssistant';
+import { LANGUAGES, TONES } from './AiWriterPanel';
 import { DocumentPreviewModal } from './DocumentPreviewModal';
 import {
   isContactFavorite,
   toggleContactFavorite,
   saveLocalContact,
   getLocalContacts,
+  parseEmailAddressList,
+  resolveContactDisplayName,
 } from '../services/contactsService';
 import {
   getDefaultSignature,
@@ -75,12 +86,142 @@ import {
 } from '../services/signatureService';
 import { detectFileKind, isPreviewableAttachment } from '../utils/fileKind';
 
+function formatRecipientsSummary(recipients: Array<{ name: string; email: string }>): string {
+  if (!recipients || recipients.length === 0) return 'Destinataire inconnu';
+  const clean = recipients.filter((r) => r.name || r.email);
+  if (clean.length === 0) return 'Destinataire inconnu';
+  const getName = (r: { name: string; email: string }) => resolveContactDisplayName(r.email, r.name);
+  if (clean.length === 1) {
+    return getName(clean[0]);
+  }
+  if (clean.length === 2) {
+    return `${getName(clean[0])}, ${getName(clean[1])}`;
+  }
+  return `${getName(clean[0])}, ${getName(clean[1])} (+${clean.length - 2})`;
+}
+
+interface ParsedQuoteResult {
+  mainHtml: string | null;
+  quotedHtml: string | null;
+  mainText: string | null;
+  quotedText: string | null;
+  hasQuote: boolean;
+}
+
+function parseEmailBodyQuotes(rawHtml: string | null, rawText: string | null): ParsedQuoteResult {
+  let mainHtml: string | null = null;
+  let quotedHtml: string | null = null;
+  let mainText: string | null = null;
+  let quotedText: string | null = null;
+  let hasQuote = false;
+
+  // Regex pattern matching quote headers in French, Malagasy, English (e.g. "Le ... a écrit :", "On ... wrote:", "De :")
+  const quoteHeaderRegex = /(Le\s+[A-Za-z0-9àáâäçéèêëìíîïòóôöùúûü\s\.,:\/-]+a\s+écrit\s*:|Le\s+[A-Za-z0-9àáâäçéèêëìíîïòóôöùúûü\s\.,:\/-]+à\s+[0-9]{1,2}:[0-9]{2}[^\n]*a\s+écrit|On\s+[A-Za-z0-9\s\.,:\/-]+\s+wrote\s*:|-----\s*Original Message\s*-----|-----\s*Message d['’]origine\s*-----|De\s*:\s*[^\n]+[\r\n]+Sent\s*:|From\s*:\s*[^\n]+[\r\n]+Sent\s*:|De\s*:\s*[^\n]+[\r\n]+Envoyé\s*:)/i;
+
+  // 1. Text quote splitting
+  if (rawText) {
+    const textMatch = rawText.match(quoteHeaderRegex);
+    if (textMatch && textMatch.index !== undefined && textMatch.index > 0) {
+      mainText = rawText.substring(0, textMatch.index).trim();
+      quotedText = rawText.substring(textMatch.index).trim();
+      hasQuote = true;
+    } else {
+      mainText = rawText;
+    }
+  }
+
+  // 2. HTML quote splitting
+  if (rawHtml) {
+    const quoteElementRegex = /<(div|blockquote)[^>]*(class=["'][^"']*(gmail_quote|gmail_extra|gmail_signature|yahoo_quoted)[^"']*["']|id=["'][^"']*(appendonsend|quote)[^"']*["'])[^>]*>/i;
+    const tagMatch = rawHtml.match(quoteElementRegex);
+
+    if (tagMatch && tagMatch.index !== undefined && tagMatch.index > 0) {
+      mainHtml = rawHtml.substring(0, tagMatch.index);
+      quotedHtml = rawHtml.substring(tagMatch.index);
+      hasQuote = true;
+    } else {
+      const bqIdx = rawHtml.search(/<blockquote/i);
+      if (bqIdx > 0) {
+        mainHtml = rawHtml.substring(0, bqIdx);
+        quotedHtml = rawHtml.substring(bqIdx);
+        hasQuote = true;
+      } else {
+        const htmlTextMatch = rawHtml.match(quoteHeaderRegex);
+        if (htmlTextMatch && htmlTextMatch.index !== undefined && htmlTextMatch.index > 0) {
+          const matchIdx = htmlTextMatch.index;
+          const lastTagOpen = rawHtml.lastIndexOf('<', matchIdx);
+          const splitIdx = lastTagOpen !== -1 ? lastTagOpen : matchIdx;
+          if (splitIdx > 0) {
+            mainHtml = rawHtml.substring(0, splitIdx);
+            quotedHtml = rawHtml.substring(splitIdx);
+            hasQuote = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (hasQuote && mainHtml !== null && mainHtml.trim() === '') {
+    mainHtml = rawHtml;
+  }
+
+  return { mainHtml, quotedHtml, mainText, quotedText, hasQuote };
+}
+
+function formatInlineFileLinks(content: string): string {
+  if (!content) return content;
+
+  // 1. Transform bracketed icon file attachments like: [Icône xlsx] Filename.xlsx<https://...>
+  let formatted = content.replace(
+    /\[Icône\s*([^\]]+)\]\s*([^<]+)<(https?:\/\/[^>]+)>/gi,
+    (_match, iconType, fileName, fileUrl) => {
+      const cleanName = fileName.trim();
+      const cleanUrl = fileUrl.trim();
+      const ext = (iconType || cleanName.split('.').pop() || 'file').toLowerCase();
+
+      let badgeIcon = '📎';
+      if (['xlsx', 'xls', 'csv'].includes(ext)) badgeIcon = '📊';
+      else if (['docx', 'doc'].includes(ext)) badgeIcon = '📝';
+      else if (['pdf'].includes(ext)) badgeIcon = '📕';
+
+      return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-2.5 py-1 my-0.5 rounded-lg border border-cyan-500/30 bg-cyan-950/30 hover:bg-cyan-900/50 text-cyan-300 font-medium text-xs no-underline transition cursor-pointer max-w-full">
+        <span class="text-sm shrink-0">${badgeIcon}</span>
+        <span class="truncate font-semibold text-slate-200">${cleanName}</span>
+        <svg class="w-3 h-3 text-cyan-400 shrink-0 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+      </a>`;
+    }
+  );
+
+  // 2. Transform filename.ext<https://...> where not matched above
+  formatted = formatted.replace(
+    /([a-zA-Z0-9_\s-]+\.(?:xlsx?|docx?|pdf|pptx?|zip|rar|png|jpg|jpeg|csv|txt))\s*<(https?:\/\/[^>]+)>/gi,
+    (_match, fileName, fileUrl) => {
+      const cleanName = fileName.trim();
+      const cleanUrl = fileUrl.trim();
+      const ext = cleanName.split('.').pop()?.toLowerCase() || 'file';
+
+      let badgeIcon = '📎';
+      if (['xlsx', 'xls', 'csv'].includes(ext)) badgeIcon = '📊';
+      else if (['docx', 'doc'].includes(ext)) badgeIcon = '📝';
+      else if (['pdf'].includes(ext)) badgeIcon = '📕';
+
+      return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-2.5 py-1 my-0.5 rounded-lg border border-cyan-500/30 bg-cyan-950/30 hover:bg-cyan-900/50 text-cyan-300 font-medium text-xs no-underline transition cursor-pointer max-w-full">
+        <span class="text-sm shrink-0">${badgeIcon}</span>
+        <span class="truncate font-semibold text-slate-200">${cleanName}</span>
+        <svg class="w-3 h-3 text-cyan-400 shrink-0 ml-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+      </a>`;
+    }
+  );
+
+  return formatted;
+}
+
 interface EmailDetailProps {
   email: ParsedEmail;
   currentUserEmail: string;
   token?: string | null;
-  emailCategory?: 'pro' | 'personal' | 'sites';
-  onUpdateEmailCategory?: (emailId: string, cat: 'pro' | 'personal' | 'sites') => void;
+  emailCategory?: 'pro' | 'personal' | 'sites' | 'other';
+  onUpdateEmailCategory?: (emailId: string, cat: 'pro' | 'personal' | 'sites' | 'other') => void;
   onBack: () => void;
   onToggleStar: (email: ParsedEmail) => void;
   onToggleUnread: (email: ParsedEmail) => void;
@@ -113,11 +254,44 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [collapsedMessages, setCollapsedMessages] = useState<Record<string, boolean>>({});
   const [detailsOpen, setDetailsOpen] = useState<Record<string, boolean>>({});
+  const [expandedCcMsgs, setExpandedCcMsgs] = useState<Record<string, boolean>>({});
+  const [expandedToMsgs, setExpandedToMsgs] = useState<Record<string, boolean>>({});
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const [trimmedExpanded, setTrimmedExpanded] = useState<Record<string, boolean>>({});
+
+  const scrollToMessage = (msgId: string) => {
+    // Uncollapse target message
+    setCollapsedMessages((prev) => ({ ...prev, [msgId]: false }));
+
+    // Flash highlight
+    setHighlightedMsgId(msgId);
+    setTimeout(() => {
+      setHighlightedMsgId((curr) => (curr === msgId ? null : curr));
+    }, 2500);
+
+    // Scroll to element smoothly
+    setTimeout(() => {
+      const el = document.getElementById(`msg-${msgId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 50);
+  };
   const [activeMenuMessageId, setActiveMenuMessageId] = useState<string | null>(null);
   const [activeEmojiPickerId, setActiveEmojiPickerId] = useState<string | null>(null);
   const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
-  const [showTranslateBanner, setShowTranslateBanner] = useState(true);
+
+  // Keyboard shortcut ESC to exit full screen mode
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullScreen) {
+        setIsFullScreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFullScreen]);
 
   // Quick reply & AI states
   const [replyMode, setReplyMode] = useState<'reply' | 'replyAll' | 'forward'>('reply');
@@ -143,12 +317,35 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   // Resolved CID inline image map (contentId/filename -> blobUrl or dataUrl)
   const [cidMap, setCidMap] = useState<Record<string, string>>({});
 
-  const [suggestions, setSuggestions] = useState<SmartReplySuggestion[]>([]);
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [customAiPrompt, setCustomAiPrompt] = useState('');
   const [isGeneratingCustomReply, setIsGeneratingCustomReply] = useState(false);
   const [isImprovingText, setIsImprovingText] = useState(false);
+  const [showInlineAi, setShowInlineAi] = useState(false);
+  const [inlineAiTone, setInlineAiTone] = useState<AiTone>('professionnel');
+  const [detectedEmailLang, setDetectedEmailLang] = useState<AiLanguage>('Français');
+  const [inlineAiLanguage, setInlineAiLanguage] = useState<AiLanguage>('Français');
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
+  const [taskAddedFeedback, setTaskAddedFeedback] = useState(false);
+
+  const handleCreateTaskFromEmail = () => {
+    try {
+      saveAgendaTask({
+        title: `Traiter : ${email.subject || '(Sans objet)'}`,
+        description: `E-mail de ${email.fromName || email.fromEmail}\n${email.snippet || ''}`,
+        type: 'programme',
+        priority: 'haute',
+        dueDate: new Date().toISOString().split('T')[0],
+        dueTime: '10:00',
+        category: effectiveCategory === 'pro' ? 'Professionnel' : effectiveCategory === 'personal' ? 'Personnel' : 'Général',
+        linkedEmailId: email.id,
+        linkedEmailSubject: email.subject || '(Sans objet)',
+      });
+      setTaskAddedFeedback(true);
+      setTimeout(() => setTaskAddedFeedback(false), 3000);
+    } catch (err) {
+      console.error('Failed to create task from email', err);
+    }
+  };
 
   const quickReplyRef = useRef<HTMLDivElement>(null);
 
@@ -161,6 +358,15 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     window.addEventListener('gmail-contacts-updated', handleUpdate);
     return () => window.removeEventListener('gmail-contacts-updated', handleUpdate);
   }, []);
+
+  // Automatically detect the received email's language and initialize the response language
+  useEffect(() => {
+    const targetMsg = replyTargetEmail || threadMessages[threadMessages.length - 1] || email;
+    const bodyContent = targetMsg.bodyText || targetMsg.snippet;
+    const detected = detectEmailLanguage(bodyContent, targetMsg.subject || email.subject);
+    setDetectedEmailLang(detected);
+    setInlineAiLanguage(detected);
+  }, [replyTargetEmail, threadMessages, email]);
 
   // Resolve inline CID image attachments automatically
   useEffect(() => {
@@ -217,14 +423,8 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
           if (!isCancelled && msgs && msgs.length > 0) {
             setThreadMessages(msgs);
             setReplyTargetEmail(msgs[msgs.length - 1]);
-            // By default, collapse all except the last message
-            const collapsed: Record<string, boolean> = {};
-            msgs.forEach((m, idx) => {
-              if (idx < msgs.length - 1) {
-                collapsed[m.id] = true;
-              }
-            });
-            setCollapsedMessages(collapsed);
+            // Unfold/expand all messages by default on opening thread as requested
+            setCollapsedMessages({});
           }
         })
         .catch((err) => {
@@ -239,35 +439,6 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       isCancelled = true;
     };
   }, [email.id, email.threadId, token]);
-
-  // 2. Load Smart Reply Suggestions
-  useEffect(() => {
-    let isCancelled = false;
-    const loadSuggestions = async () => {
-      setIsLoadingSuggestions(true);
-      try {
-        const lastMsg = threadMessages[threadMessages.length - 1] || email;
-        const bodyContent = lastMsg.bodyText || lastMsg.snippet;
-        const res = await getSmartReplySuggestions(
-          lastMsg.subject,
-          bodyContent,
-          lastMsg.fromName || lastMsg.fromEmail
-        );
-        if (!isCancelled && res && res.length > 0) {
-          setSuggestions(res);
-        }
-      } catch (e) {
-        console.warn('Could not load smart suggestions', e);
-      } finally {
-        if (!isCancelled) setIsLoadingSuggestions(false);
-      }
-    };
-
-    loadSuggestions();
-    return () => {
-      isCancelled = true;
-    };
-  }, [threadMessages, email]);
 
   const toggleCollapseMessage = (msgId: string) => {
     setCollapsedMessages((prev) => ({
@@ -317,15 +488,20 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   };
 
   const handleTriggerReply = (msg: ParsedEmail, mode: 'reply' | 'replyAll' | 'forward') => {
-    if (mode === 'replyAll') {
-      setReplyTargetEmail(threadMessages[0] || email);
-    } else if (mode === 'reply') {
-      setReplyTargetEmail(threadMessages[threadMessages.length - 1] || email);
-    } else {
-      setReplyTargetEmail(msg);
-    }
+    const target = mode === 'replyAll'
+      ? (threadMessages[0] || email)
+      : mode === 'reply'
+      ? (threadMessages[threadMessages.length - 1] || email)
+      : msg;
+    setReplyTargetEmail(target);
     setReplyMode(mode);
     setShowQuickReply(true);
+
+    // Detect language of the target email and set response language accordingly
+    const bodyContent = target.bodyText || target.snippet;
+    const detected = detectEmailLanguage(bodyContent, target.subject || email.subject);
+    setDetectedEmailLang(detected);
+    setInlineAiLanguage(detected);
 
     if (mode === 'forward') {
       const forwardPrefix = `\n\n\n---------- Message transféré ----------\nDe : ${msg.fromName || msg.fromEmail} <${msg.fromEmail}>\nDate : ${msg.dateStr}\nObjet : ${msg.subject}\nÀ : ${msg.to}\n${msg.cc ? `Cc : ${msg.cc}\n` : ''}\n${msg.bodyText || msg.snippet}`;
@@ -409,46 +585,67 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     }
   };
 
-  // Apply Smart Reply Suggestion
-  const handleApplySuggestion = (sugg: SmartReplySuggestion) => {
-    setShowQuickReply(true);
-    setQuickReplyText(sugg.replyText);
-    setTimeout(() => {
-      quickReplyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
-  };
-
-  // Custom AI Reply Generator
-  const handleGenerateCustomReply = async () => {
-    if (!customAiPrompt.trim()) return;
+  // Custom AI Reply Generator (Gemini inside the reply box)
+  const handleGenerateCustomReply = async (promptOverride?: string) => {
+    const promptToUse = (promptOverride || customAiPrompt).trim();
+    if (!promptToUse) return;
     setIsGeneratingCustomReply(true);
     try {
-      const lastMsg = threadMessages[threadMessages.length - 1] || email;
-      const improved = await improveEmailText(
-        `Génère une réponse professionnelle et polie à cet email. Instruction spécifique : "${customAiPrompt}". Contexte de l'email : "${lastMsg.bodyText || lastMsg.snippet}"`,
-        'professional'
-      );
-      if (improved) {
+      const targetMsg = replyTargetEmail || threadMessages[threadMessages.length - 1] || email;
+      const res = await draftEmailWithAi({
+        prompt: promptToUse,
+        recipient: targetMsg.fromEmail,
+        tone: inlineAiTone,
+        language: inlineAiLanguage,
+        emailContext: {
+          subject: email.subject,
+          body: targetMsg.bodyText || targetMsg.snippet,
+          sender: targetMsg.fromName || targetMsg.fromEmail,
+        },
+      });
+      if (res && res.body) {
         setShowQuickReply(true);
-        setQuickReplyText(improved);
+        setQuickReplyText(res.body);
         setCustomAiPrompt('');
+        setShowInlineAi(false);
         setTimeout(() => {
           quickReplyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 100);
       }
     } catch (err) {
       console.warn('Erreur génération custom AI reply:', err);
+      // Fallback
+      try {
+        const targetMsg = replyTargetEmail || threadMessages[threadMessages.length - 1] || email;
+        const improved = await improveEmailText(
+          `Génère une réponse professionnelle et polie à cet email (de ${targetMsg.fromName || targetMsg.fromEmail}). Consigne : "${promptToUse}". Contexte du message : "${targetMsg.bodyText || targetMsg.snippet}"`,
+          'professional',
+          undefined,
+          inlineAiLanguage
+        );
+        if (improved) {
+          setShowQuickReply(true);
+          setQuickReplyText(improved);
+          setCustomAiPrompt('');
+          setShowInlineAi(false);
+          setTimeout(() => {
+            quickReplyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 100);
+        }
+      } catch (fallbackErr) {
+        console.error('Erreur fallback IA:', fallbackErr);
+      }
     } finally {
       setIsGeneratingCustomReply(false);
     }
   };
 
-  // Quick Reply Polish with AI
+  // Quick Reply Polish with AI (honoring the detected/selected reply language)
   const handleImproveQuickReply = async (action: ImproveAction) => {
     if (!quickReplyText.trim() || isImprovingText) return;
     setIsImprovingText(true);
     try {
-      const improved = await improveEmailText(quickReplyText, action);
+      const improved = await improveEmailText(quickReplyText, action, undefined, inlineAiLanguage);
       if (improved) {
         setQuickReplyText(improved);
       }
@@ -471,7 +668,9 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     if (defaultSig) {
       const sigText = formatSignatureText(defaultSig);
       if (sigText && !finalBody.includes(sigText)) {
-        finalBody = `${finalBody}\n\n--\n${sigText}`;
+        finalBody = finalBody.includes('<')
+          ? `${finalBody}<br /><br />--<br />${sigText.replace(/\n/g, '<br />')}`
+          : `${finalBody}\n\n--\n${sigText}`;
       }
     }
 
@@ -517,10 +716,15 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       allParticipants.delete(firstMsg.fromEmail);
       ccAddresses = Array.from(allParticipants).join(', ');
     } else {
-      // Reply: reply to the last person only
+      // Reply: reply to the recipient if sent by me, or to sender if received
       const lastMsg = threadMessages[threadMessages.length - 1] || email;
       targetMsg = lastMsg;
-      toAddresses = lastMsg.fromEmail;
+      const isSentByMe = Boolean(
+        (currentUserEmail && lastMsg.fromEmail?.toLowerCase().trim() === currentUserEmail.toLowerCase().trim()) ||
+        lastMsg.labelIds?.includes('SENT') ||
+        lastMsg.fromName?.toLowerCase() === 'moi'
+      );
+      toAddresses = isSentByMe ? (lastMsg.to || lastMsg.fromEmail) : lastMsg.fromEmail;
     }
 
     replySubject = targetMsg.subject.startsWith('Re:')
@@ -543,22 +747,36 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     setShowQuickReply(false);
   };
 
-  // Get list of unique participants for thread overview
+  // Get list of unique participants for thread overview (resolving contact book names)
   const threadParticipants = useMemo(() => {
     const map = new Map<string, string>();
     threadMessages.forEach((m) => {
-      const name = m.fromName || m.fromEmail.split('@')[0];
-      map.set(m.fromEmail.toLowerCase(), name);
+      const senderName = resolveContactDisplayName(m.fromEmail, m.fromName);
+      map.set(m.fromEmail.toLowerCase(), senderName);
+
+      // Also include recipients so sent emails clearly show the recipient name
+      const recs = parseEmailAddressList(m.to);
+      recs.forEach((r) => {
+        if (!map.has(r.email.toLowerCase())) {
+          map.set(r.email.toLowerCase(), resolveContactDisplayName(r.email, r.name));
+        }
+      });
     });
     return Array.from(map.entries()).map(([email, name]) => ({ email, name }));
-  }, [threadMessages]);
+  }, [threadMessages, contactsVersion]);
 
   const allCollapsed = useMemo(() => {
     return threadMessages.length > 1 && Object.values(collapsedMessages).every(Boolean);
   }, [threadMessages, collapsedMessages]);
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto select-text font-sans">
+    <div
+      className={`flex-1 flex flex-col h-full overflow-y-auto select-text font-sans transition-all ${
+        isFullScreen
+          ? `fixed inset-0 z-50 overflow-y-auto ${isDark ? 'bg-[#05070A] text-slate-100' : 'bg-white text-slate-900'}`
+          : ''
+      }`}
+    >
       {/* Top Sticky Navigation / Actions Bar */}
       <div
         className={`sticky top-0 z-20 flex items-center justify-between px-4 sm:px-8 py-3 border-b backdrop-blur-md transition-colors ${
@@ -630,8 +848,26 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
           </button>
         </div>
 
-        {/* Right: Category Picker + Header Utilities (Expand all, Print) */}
+        {/* Right: Category Picker + Header Utilities (Full Screen, Expand all, Print) */}
         <div className="flex items-center gap-2">
+          {/* Full Screen Reading Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setIsFullScreen(!isFullScreen)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition ${
+              isFullScreen
+                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 shadow-xs'
+                : isDark
+                ? 'hover:bg-slate-800 text-slate-300 hover:text-white'
+                : 'hover:bg-slate-100 text-slate-700 hover:text-black'
+            }`}
+            title={isFullScreen ? 'Quitter le mode plein écran (Échap)' : 'Mode lecture plein écran'}
+          >
+            {isFullScreen ? <Minimize2 className="h-4 w-4 text-cyan-400" /> : <Maximize2 className="h-4 w-4" />}
+            <span className="hidden md:inline font-mono text-[11px]">
+              {isFullScreen ? 'Quitter plein écran' : 'Plein écran'}
+            </span>
+          </button>
           {/* Thread expand/collapse all */}
           {threadMessages.length > 1 && (
             <button
@@ -646,11 +882,38 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
             </button>
           )}
 
+          {/* Add to Agenda button */}
+          <button
+            type="button"
+            id="detail-add-task-btn"
+            onClick={handleCreateTaskFromEmail}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              taskAddedFeedback
+                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                : isDark
+                ? 'hover:bg-slate-800 text-slate-300 hover:text-cyan-400'
+                : 'hover:bg-slate-100 text-slate-700 hover:text-cyan-700'
+            }`}
+            title="Créer une tâche dans l'agenda à partir de cet e-mail"
+          >
+            {taskAddedFeedback ? (
+              <>
+                <Check className="h-4 w-4 text-emerald-400" />
+                <span className="font-mono text-[11px] text-emerald-400">Ajouté !</span>
+              </>
+            ) : (
+              <>
+                <CalendarPlus className="h-4 w-4 text-cyan-400" />
+                <span className="hidden lg:inline font-mono text-[11px]">Agenda</span>
+              </>
+            )}
+          </button>
+
           {/* Print button */}
           <button
             type="button"
             onClick={handlePrint}
-            className={`p-2 rounded-xl transition ${
+            className={`p-2 rounded-xl transition cursor-pointer ${
               isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-500 hover:text-black'
             }`}
             title="Imprimer tout le fil"
@@ -671,13 +934,14 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               {effectiveCategory === 'pro' && <Briefcase className="h-3.5 w-3.5" />}
               {effectiveCategory === 'personal' && <User className="h-3.5 w-3.5" />}
               {effectiveCategory === 'sites' && <Globe className="h-3.5 w-3.5" />}
+              {effectiveCategory === 'other' && <Layers className="h-3.5 w-3.5" />}
               <span>{catInfo.label}</span>
               <ChevronDown className="h-3 w-3 opacity-60" />
             </button>
 
             {showCategoryMenu && (
               <div
-                className={`absolute right-0 top-full mt-1.5 w-48 rounded-xl shadow-xl border overflow-hidden z-30 ${
+                className={`absolute right-0 top-full mt-1.5 w-52 rounded-xl shadow-xl border overflow-hidden z-30 ${
                   isDark ? 'bg-[#0E131F] border-slate-700' : 'bg-white border-slate-200'
                 }`}
               >
@@ -688,7 +952,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                 >
                   Changer de catégorie
                 </div>
-                {(['pro', 'personal', 'sites'] as const).map((c) => {
+                {(['pro', 'personal', 'sites', 'other'] as const).map((c) => {
                   const info = CATEGORIES[c];
                   return (
                     <button
@@ -712,6 +976,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                         {c === 'pro' && <Briefcase className="h-3.5 w-3.5 text-cyan-400" />}
                         {c === 'personal' && <User className="h-3.5 w-3.5 text-emerald-400" />}
                         {c === 'sites' && <Globe className="h-3.5 w-3.5 text-violet-400" />}
+                        {c === 'other' && <Layers className="h-3.5 w-3.5 text-amber-400" />}
                         <span>{info.label}</span>
                       </div>
                       {effectiveCategory === c && <Check className="h-3.5 w-3.5" />}
@@ -724,59 +989,101 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
         </div>
       </div>
 
-      {/* TOP SUBJECT & FOLDER BADGE HEADER (IDENTICAL TO GMAIL AS IN IMAGE) */}
-      <div className="px-6 sm:px-10 pt-6 pb-4 border-b border-slate-700/30">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3 min-w-0">
+      {/* TOP SUBJECT & FOLDER BADGE HEADER - COMPACT GMAIL DENSITY */}
+      <div className="px-3 sm:px-6 py-2 border-b border-slate-700/20">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <h1
               id="detail-email-subject"
-              className={`text-xl sm:text-2xl font-bold tracking-tight ${
-                isDark ? 'text-white' : 'text-slate-950'
+              className={`text-base sm:text-lg font-semibold tracking-tight ${
+                isDark ? 'text-white' : 'text-slate-900'
               }`}
             >
               {email.subject || '(Sans objet)'}
             </h1>
 
-            {/* Folder badge like Gmail pill: Boîte de réception ✕ */}
-            <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-medium bg-slate-200/80 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-300/60 dark:border-slate-700">
-              <span>Boîte de réception</span>
+            {/* Folder badge like Gmail pill: Boîte de réception / Messages envoyés ✕ */}
+            <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-200/70 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300/50 dark:border-slate-700">
+              {email.labelIds?.includes('SENT') ? (
+                <span className="inline-flex items-center gap-1 font-semibold text-cyan-600 dark:text-cyan-300">
+                  <Send className="h-2.5 w-2.5 rotate-45" />
+                  <span>Messages envoyés</span>
+                </span>
+              ) : email.labelIds?.includes('DRAFT') ? (
+                <span>Brouillons</span>
+              ) : email.labelIds?.includes('SPAM') ? (
+                <span>Spam</span>
+              ) : email.labelIds?.includes('TRASH') ? (
+                <span>Corbeille</span>
+              ) : (
+                <span>Boîte de réception</span>
+              )}
               <button
                 type="button"
                 onClick={() => onBack()}
-                className="hover:text-red-500 transition p-0.5"
-                title="Supprimer le libellé de l'affichage"
+                className="hover:text-red-500 transition p-0.5 cursor-pointer"
+                title="Retour à la liste"
               >
-                <X className="h-3 w-3" />
+                <X className="h-2.5 w-2.5" />
               </button>
             </div>
           </div>
         </div>
-
-        {/* Thread Participants Pill list if multiple messages */}
-        {threadMessages.length > 1 && (
-          <div className="flex flex-wrap items-center gap-2 mt-3 pt-2 text-xs font-mono text-slate-400">
-            <span className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-cyan-400">
-              <Users className="h-3.5 w-3.5" /> Participants ({threadParticipants.length}) :
-            </span>
-            {threadParticipants.map((p) => (
-              <span
-                key={p.email}
-                className={`px-2 py-0.5 rounded-md text-[11px] ${
-                  isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-200 text-slate-800'
-                }`}
-                title={p.email}
-              >
-                {p.name}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
+      {/* STICKY TIMELINE & PARTICIPANTS BAR FOR MULTI-REPLY THREADS */}
+      {threadMessages.length > 1 && (
+        <div
+          className={`sticky top-[49px] z-10 px-3 sm:px-5 py-1.5 border-b shadow-xs flex flex-wrap items-center justify-between gap-2 text-xs transition-colors backdrop-blur-md ${
+            isDark
+              ? 'bg-[#0E131F]/95 border-slate-800 text-slate-300'
+              : 'bg-slate-100/95 border-slate-200 text-slate-800'
+          }`}
+        >
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <span className="flex items-center gap-1.5 font-mono font-bold text-[10px] text-cyan-500 dark:text-cyan-400 shrink-0 uppercase tracking-wider">
+              <Users className="h-3 w-3" />
+              <span>Intervenants ({threadMessages.length}) :</span>
+            </span>
+
+            <div className="flex items-center gap-1 overflow-x-auto py-0.5 max-w-full no-scrollbar">
+              {threadMessages.map((m, idx) => {
+                const senderName = m.fromName || m.fromEmail.split('@')[0];
+                const isTargeted = replyTargetEmail?.id === m.id;
+                const isHighlighted = highlightedMsgId === m.id;
+
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => scrollToMessage(m.id)}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition cursor-pointer shrink-0 border ${
+                      isHighlighted
+                        ? 'bg-cyan-500 text-white border-cyan-400 font-bold scale-105 ring-2 ring-cyan-300'
+                        : isTargeted
+                        ? isDark
+                          ? 'bg-cyan-950/80 border-cyan-500/50 text-cyan-300'
+                          : 'bg-cyan-100 border-cyan-300 text-cyan-900'
+                        : isDark
+                        ? 'bg-slate-800/80 border-slate-700/80 text-slate-300 hover:bg-slate-700 hover:text-white'
+                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-200 hover:text-black'
+                    }`}
+                    title={`Cliquer pour aller directement au message de ${senderName} (${m.dateStr})`}
+                  >
+                    <span className="font-mono text-[9px] font-bold opacity-70">#{idx + 1}</span>
+                    <span className="truncate max-w-[120px] sm:max-w-[150px] font-semibold">{senderName}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Conversation Flow */}
-      <div className="flex-1 p-4 sm:p-8 space-y-5 max-w-5xl mx-auto w-full">
+      <div className="flex-1 p-2 sm:p-4 space-y-1.5 max-w-5xl mx-auto w-full">
         {isLoadingThread && threadMessages.length === 1 ? (
-          <div className="flex items-center justify-center py-6 gap-2 text-xs font-mono text-cyan-400">
+          <div className="flex items-center justify-center py-4 gap-2 text-xs font-mono text-cyan-400">
             <Loader2 className="h-4 w-4 animate-spin" />
             <span>Chargement du fil de discussion...</span>
           </div>
@@ -788,7 +1095,8 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
           const isLastMessage = index === threadMessages.length - 1;
           const isDetailsOpen = Boolean(detailsOpen[msg.id]);
           const isTrimmedOpen = Boolean(trimmedExpanded[msg.id]);
-          const initial = (msg.fromName || msg.fromEmail || '?').charAt(0).toUpperCase();
+          const resolvedSenderName = resolveContactDisplayName(msg.fromEmail, msg.fromName);
+          const initial = (resolvedSenderName || msg.fromEmail || '?').charAt(0).toUpperCase();
 
           // Avatar background palette
           const avatarColors = [
@@ -801,7 +1109,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
           ];
           const avatarBg = avatarColors[index % avatarColors.length];
 
-          // Process HTML body for inline CID images
+          // Process HTML body for inline CID images and inline file link formatting
           let rawHtml = msg.bodyHtml || '';
           if (rawHtml) {
             // Replace cid: references with resolved inline data/blob URLs or cidMap
@@ -824,24 +1132,59 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                 });
               });
             }
+
+            rawHtml = formatInlineFileLinks(rawHtml);
           }
 
-          const sanitizedMsgHtml = rawHtml
-            ? DOMPurify.sanitize(rawHtml, {
-                ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|data|blob):|[^a-z]|[a-z+.-]+(?:[^a-z+.-]|$))/i,
-                ADD_ATTR: ['target', 'style', 'src', 'alt', 'width', 'height', 'class', 'loading', 'srcset', 'align'],
-                FORBID_TAGS: ['script', 'iframe', 'form'],
-              })
-            : null;
+          const globalSanitizeConfig = {
+            ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|data|blob):|[^a-z]|[a-z+.-]+(?:[^a-z+.-]|$))/i,
+            ADD_ATTR: [
+              'target', 'style', 'src', 'alt', 'width', 'height', 'class', 'loading', 'srcset', 'align', 'valign',
+              'color', 'bgcolor', 'background', 'border', 'cellpadding', 'cellspacing', 'face', 'size',
+              'colspan', 'rowspan', 'dir', 'nowrap', 'id', 'name', 'clear',
+              'rel', 'title', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd'
+            ],
+            ADD_TAGS: ['svg', 'path', 'font', 'center', 'hr', 'br', 'style', 'bdo', 's', 'strike', 'u'],
+            FORBID_TAGS: ['script', 'iframe', 'form'],
+          };
 
-          const isSenderFav = isContactFavorite(msg.fromEmail);
+          const sanitizedMsgHtml = rawHtml ? DOMPurify.sanitize(rawHtml, globalSanitizeConfig) : null;
+
+          const isSentByMe = Boolean(
+            (currentUserEmail && msg.fromEmail?.toLowerCase().trim() === currentUserEmail.toLowerCase().trim()) ||
+            msg.labelIds?.includes('SENT') ||
+            msg.fromName?.toLowerCase() === 'moi'
+          );
+
+          const recipients = parseEmailAddressList(msg.to);
+          const primaryRecipient = recipients[0];
+          const resolvedPrimaryName = primaryRecipient
+            ? resolveContactDisplayName(primaryRecipient.email, primaryRecipient.name)
+            : 'Destinataire inconnu';
+          const recipientNames = recipients.length > 0
+            ? formatRecipientsSummary(recipients)
+            : (msg.to || 'Destinataire inconnu');
+
+          const recipientInitial = (resolvedPrimaryName || 'D').charAt(0).toUpperCase();
+
+          const displayInitial = isSentByMe ? recipientInitial : initial;
+          const displayAvatarBg = isSentByMe
+            ? 'bg-gradient-to-tr from-cyan-600 to-blue-600'
+            : avatarBg;
+
+          const isContactFav = isSentByMe
+            ? (primaryRecipient ? isContactFavorite(primaryRecipient.email) : false)
+            : isContactFavorite(msg.fromEmail);
           const reactions = messageReactions[msg.id] || [];
 
           return (
             <div
+              id={`msg-${msg.id}`}
               key={msg.id}
-              className={`rounded-2xl border transition-all ${
-                isLastMessage
+              className={`rounded-2xl border transition-all duration-300 scroll-mt-28 ${
+                highlightedMsgId === msg.id
+                  ? 'ring-2 ring-cyan-500 border-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.35)] scale-[1.01]'
+                  : isLastMessage
                   ? isDark
                     ? 'bg-[#080B10] border-slate-700 shadow-[0_4px_20px_rgba(0,0,0,0.4)]'
                     : 'bg-white border-slate-300 shadow-sm'
@@ -850,28 +1193,47 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                   : 'bg-slate-50 border-slate-200 hover:border-slate-300'
               }`}
             >
-              {/* COLLAPSED MESSAGE VIEW (As shown in image top item) */}
+              {/* COLLAPSED MESSAGE VIEW */}
               {isCollapsed ? (
                 <div
                   onClick={() => toggleCollapseMessage(msg.id)}
-                  className="flex items-center justify-between p-3.5 sm:p-4 cursor-pointer select-none hover:bg-slate-500/5 transition"
+                  className="flex items-center justify-between p-2 sm:p-2.5 cursor-pointer select-none hover:bg-slate-500/5 transition"
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     {/* Circle Avatar */}
                     <div
-                      className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-xs shrink-0 ${avatarBg}`}
+                      className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-xs shrink-0 ${displayAvatarBg}`}
+                      title={isSentByMe ? `Destinataire : ${recipientNames}` : (msg.fromName || msg.fromEmail)}
                     >
-                      {initial}
+                      {displayInitial}
                     </div>
 
-                    {/* Sender Name/Email */}
-                    <span
-                      className={`text-xs font-bold shrink-0 max-w-[180px] sm:max-w-[220px] truncate ${
-                        isDark ? 'text-slate-200' : 'text-slate-900'
-                      }`}
-                    >
-                      {msg.fromName || msg.fromEmail}
-                    </span>
+                    {/* Sender or Recipient Name in prominence */}
+                    {isSentByMe ? (
+                      <div className="flex items-center gap-1.5 shrink-0 max-w-[200px] sm:max-w-[280px] truncate">
+                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 dark:bg-cyan-950/80 border border-cyan-500/30 text-cyan-600 dark:text-cyan-300 shrink-0 inline-flex items-center gap-0.5">
+                          <Send className="h-2.5 w-2.5 rotate-45" />
+                          <span>À :</span>
+                        </span>
+                        <span
+                          className={`text-xs font-bold truncate ${
+                            isDark ? 'text-cyan-200' : 'text-cyan-950'
+                          }`}
+                          title={`Destinataire : ${recipientNames}`}
+                        >
+                          {recipientNames}
+                        </span>
+                      </div>
+                    ) : (
+                      <span
+                        className={`text-xs font-semibold shrink-0 max-w-[160px] sm:max-w-[200px] truncate ${
+                          isDark ? 'text-slate-200' : 'text-slate-900'
+                        }`}
+                        title={resolvedSenderName}
+                      >
+                        {resolvedSenderName}
+                      </span>
+                    )}
 
                     {/* Snippet on same row */}
                     <span
@@ -883,8 +1245,8 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0 ml-3">
-                    <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    <span className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                       {msg.dateStr}
                     </span>
 
@@ -894,11 +1256,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                         e.stopPropagation();
                         onToggleStar(msg);
                       }}
-                      className="p-1 hover:scale-110 transition"
+                      className="p-0.5 hover:scale-110 transition cursor-pointer"
                       title={msg.isStarred ? 'Message suivi' : 'Non suivi'}
                     >
                       <Star
-                        className={`h-4 w-4 ${
+                        className={`h-3.5 w-3.5 ${
                           msg.isStarred ? 'text-amber-400 fill-amber-400' : 'text-slate-400'
                         }`}
                       />
@@ -906,141 +1268,211 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                   </div>
                 </div>
               ) : (
-                /* EXPANDED MESSAGE VIEW (Exact Gmail Layout as shown in image.png) */
-                <div className="p-4 sm:p-6">
-                  {/* Message Header */}
-                  <div className="flex items-start justify-between gap-3 pb-4">
-                    <div className="flex items-start gap-3.5 min-w-0">
-                      {/* Left Avatar Circle */}
+                /* EXPANDED MESSAGE VIEW (Compact Gmail Density) */
+                <div className="px-3 py-2 sm:px-4 sm:py-2.5">
+                  {/* Message Header - Compact Gmail Density */}
+                  <div className="flex items-center justify-between gap-2 pb-1.5 mb-2 border-b border-slate-100 dark:border-slate-800/60">
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      {/* Left Avatar Circle (Compact 32px like Gmail) */}
                       <div
-                        className={`h-10 w-10 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-xs shrink-0 ${avatarBg}`}
+                        className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-xs shrink-0 ${displayAvatarBg}`}
+                        title={isSentByMe ? `Destinataire : ${recipientNames}` : (msg.fromName || msg.fromEmail)}
                       >
-                        {initial}
+                        {displayInitial}
                       </div>
 
                       {/* Sender Info & Recipient Row with Dropdown Details */}
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3
-                            className={`text-sm sm:text-base font-bold truncate ${
-                              isDark ? 'text-white' : 'text-slate-950'
-                            }`}
-                          >
-                            {msg.fromName || msg.fromEmail}
-                          </h3>
-
-                          {/* VIP Favorite Star */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const existing = getLocalContacts().find(
-                                (c) => c.email.toLowerCase() === msg.fromEmail.toLowerCase()
-                              );
-                              if (existing) {
-                                toggleContactFavorite(existing.id);
-                              } else {
-                                saveLocalContact({
-                                  name: msg.fromName || msg.fromEmail.split('@')[0],
-                                  email: msg.fromEmail,
-                                  isFavorite: true,
-                                  category: 'pro',
-                                });
-                              }
-                            }}
-                            className={`p-0.5 rounded transition ${
-                              isSenderFav
-                                ? 'text-amber-400 hover:scale-110'
-                                : 'text-slate-400 hover:text-amber-400 hover:scale-110'
-                            }`}
-                            title={
-                              isSenderFav
-                                ? 'Contact Favori VIP (Priorité en tête de liste)'
-                                : 'Ajouter ce contact en Favori VIP'
-                            }
-                          >
-                            <Star className={`h-4 w-4 ${isSenderFav ? 'fill-amber-400' : ''}`} />
-                          </button>
-
-                          <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            &lt;{msg.fromEmail}&gt;
-                          </span>
-                        </div>
-
-                        {/* LINE 2: "À rhsemstul, moi ▼" + prominent CC display matching Gmail */}
-                        <div className="relative mt-1">
-                          <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                            <span>À :</span>
-                            <span className="font-medium text-slate-700 dark:text-slate-300">
-                              {msg.to || currentUserEmail}
+                      <div className="min-w-0 flex-1">
+                        {isSentByMe ? (
+                          <div className="flex flex-wrap items-center gap-2 leading-tight">
+                            <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 dark:bg-cyan-950/80 border border-cyan-500/30 text-cyan-600 dark:text-cyan-300 shrink-0 inline-flex items-center gap-1 shadow-xs">
+                              <Send className="h-2.5 w-2.5 rotate-45" />
+                              <span>À :</span>
+                            </span>
+                            <span
+                              className={`text-xs sm:text-sm font-bold truncate max-w-[240px] sm:max-w-[380px] ${
+                                isDark ? 'text-cyan-200' : 'text-cyan-900'
+                              }`}
+                              title={`Destinataire principal : ${recipientNames}`}
+                            >
+                              {recipientNames}
+                            </span>
+                            {primaryRecipient && (
+                              <span className={`text-[11px] sm:text-xs truncate max-w-[180px] sm:max-w-[280px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                                &lt;{recipients.map((r) => r.email).join(', ')}&gt;
+                              </span>
+                            )}
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 font-semibold shrink-0">
+                              Message envoyé
                             </span>
 
-                            {/* CC PROMINENT DISPLAY */}
-                            {msg.cc && (
+                            {/* VIP Favorite Star on primary recipient */}
+                            {primaryRecipient && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const existing = getLocalContacts().find(
+                                    (c) => c.email.toLowerCase() === primaryRecipient.email.toLowerCase()
+                                  );
+                                  if (existing) {
+                                    toggleContactFavorite(existing.id);
+                                  } else {
+                                    saveLocalContact({
+                                      name: primaryRecipient.name || primaryRecipient.email.split('@')[0],
+                                      email: primaryRecipient.email,
+                                      isFavorite: true,
+                                      category: 'pro',
+                                    });
+                                  }
+                                }}
+                                className={`p-0.5 rounded transition cursor-pointer ${
+                                  isContactFav
+                                    ? 'text-amber-400 hover:scale-110'
+                                    : 'text-slate-400 hover:text-amber-400'
+                                }`}
+                                title={
+                                  isContactFav
+                                    ? 'Destinataire Favori VIP (Priorité en tête de liste)'
+                                    : 'Ajouter ce destinataire en Favori VIP'
+                                }
+                              >
+                                <Star className={`h-3.5 w-3.5 ${isContactFav ? 'fill-amber-400' : ''}`} />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1.5 leading-tight">
+                            <span
+                              className={`text-xs sm:text-sm font-semibold truncate max-w-[200px] sm:max-w-[320px] ${
+                                isDark ? 'text-white' : 'text-slate-900'
+                              }`}
+                              title={resolvedSenderName}
+                            >
+                              {resolvedSenderName}
+                            </span>
+
+                            <span className={`text-[11px] sm:text-xs truncate max-w-[180px] sm:max-w-[260px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                              &lt;{msg.fromEmail}&gt;
+                            </span>
+
+                            {/* VIP Favorite Star */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const existing = getLocalContacts().find(
+                                  (c) => c.email.toLowerCase() === msg.fromEmail.toLowerCase()
+                                );
+                                if (existing) {
+                                  toggleContactFavorite(existing.id);
+                                } else {
+                                  saveLocalContact({
+                                    name: msg.fromName || msg.fromEmail.split('@')[0],
+                                    email: msg.fromEmail,
+                                    isFavorite: true,
+                                    category: 'pro',
+                                  });
+                                }
+                              }}
+                              className={`p-0.5 rounded transition cursor-pointer ${
+                                isContactFav
+                                  ? 'text-amber-400 hover:scale-110'
+                                  : 'text-slate-400 hover:text-amber-400'
+                              }`}
+                              title={
+                                isContactFav
+                                  ? 'Contact Favori VIP (Priorité en tête de liste)'
+                                  : 'Ajouter ce contact en Favori VIP'
+                              }
+                            >
+                              <Star className={`h-3.5 w-3.5 ${isContactFav ? 'fill-amber-400' : ''}`} />
+                            </button>
+                          </div>
+                        )}
+
+                        {/* LINE 2: "De : moi" if sent, or "À : moi" if received */}
+                        <div className="relative mt-0.5">
+                          <div className="flex items-center gap-1 text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 max-w-full">
+                            {isSentByMe ? (
                               <>
-                                <span className="text-slate-400 mx-1">|</span>
-                                <span className="font-semibold text-cyan-600 dark:text-cyan-400">
-                                  Cc : {msg.cc}
+                                <span className="shrink-0 text-slate-400 font-mono text-[10px]">De :</span>
+                                <span className="font-medium text-slate-700 dark:text-slate-300 truncate max-w-[220px] sm:max-w-[380px]">
+                                  Moi &lt;{msg.fromEmail}&gt;
                                 </span>
                               </>
+                            ) : (
+                              <>
+                                <span className="shrink-0 text-slate-400">À :</span>
+                                <span className="truncate max-w-[220px] sm:max-w-[420px]">
+                                  {msg.to ? msg.to.split(',')[0] + (msg.to.includes(',') ? ` (+${msg.to.split(',').length - 1})` : '') : 'moi'}
+                                </span>
+                              </>
+                            )}
+
+                            {msg.cc && (
+                              <span className="text-[10px] text-cyan-500 dark:text-cyan-400 shrink-0 font-medium">
+                                (Cc inclus)
+                              </span>
                             )}
 
                             {/* Dropdown Chevron for Full Gmail Details */}
                             <button
                               type="button"
                               onClick={(e) => toggleDetails(msg.id, e)}
-                              className={`p-0.5 rounded hover:bg-slate-500/10 transition inline-flex items-center ${
+                              className={`p-0.5 rounded hover:bg-slate-500/10 transition inline-flex items-center cursor-pointer ${
                                 isDetailsOpen ? 'text-cyan-500' : 'text-slate-400'
                               }`}
                               title="Afficher les détails de distribution"
                             >
-                              <ChevronDown className="h-3.5 w-3.5" />
+                              <ChevronDown className="h-3 w-3" />
                             </button>
                           </div>
 
                           {/* GMAIL POPUP DETAILS CARD (De, À, Cc, Date, Objet, Sécurité) */}
                           {isDetailsOpen && (
                             <div
-                              className={`absolute left-0 top-full mt-2 w-full max-w-md rounded-xl p-4 shadow-xl border z-30 text-xs font-sans space-y-2.5 ${
+                              className={`absolute left-0 top-full mt-1 w-full max-w-sm rounded-xl p-3 shadow-xl border z-30 text-xs font-sans space-y-1.5 ${
                                 isDark
                                   ? 'bg-[#0E131F] border-slate-700 text-slate-300 shadow-[0_10px_25px_rgba(0,0,0,0.5)]'
                                   : 'bg-white border-slate-200 text-slate-700 shadow-xl'
                               }`}
                             >
-                              <div className="grid grid-cols-[60px_1fr] gap-2 items-baseline">
-                                <span className="font-bold text-slate-400">De :</span>
-                                <span className="font-semibold text-slate-900 dark:text-white">
-                                  {msg.fromName} &lt;{msg.fromEmail}&gt;
+                              <div className="grid grid-cols-[50px_1fr] gap-1.5 items-baseline">
+                                <span className="font-semibold text-slate-400">De :</span>
+                                <span className="font-semibold text-slate-900 dark:text-white truncate">
+                                  {isSentByMe ? `Moi <${msg.fromEmail}>` : `${msg.fromName || msg.fromEmail} <${msg.fromEmail}>`}
                                 </span>
                               </div>
 
-                              <div className="grid grid-cols-[60px_1fr] gap-2 items-baseline">
-                                <span className="font-bold text-slate-400">À :</span>
-                                <span>{msg.to || currentUserEmail}</span>
+                              <div className="grid grid-cols-[50px_1fr] gap-1.5 items-baseline">
+                                <span className="font-semibold text-slate-400">À :</span>
+                                <span className="break-all font-semibold text-cyan-600 dark:text-cyan-300">
+                                  {msg.to || (isSentByMe ? recipientNames : currentUserEmail)}
+                                </span>
                               </div>
 
                               {msg.cc && (
-                                <div className="grid grid-cols-[60px_1fr] gap-2 items-baseline">
-                                  <span className="font-bold text-cyan-500">Cc :</span>
-                                  <span className="font-medium text-cyan-600 dark:text-cyan-400">
+                                <div className="grid grid-cols-[50px_1fr] gap-1.5 items-baseline">
+                                  <span className="font-semibold text-cyan-500">Cc :</span>
+                                  <span className="font-medium text-cyan-600 dark:text-cyan-400 break-all">
                                     {msg.cc}
                                   </span>
                                 </div>
                               )}
 
-                              <div className="grid grid-cols-[60px_1fr] gap-2 items-baseline">
-                                <span className="font-bold text-slate-400">Date :</span>
+                              <div className="grid grid-cols-[50px_1fr] gap-1.5 items-baseline">
+                                <span className="font-semibold text-slate-400">Date :</span>
                                 <span>{msg.dateStr}</span>
                               </div>
 
-                              <div className="grid grid-cols-[60px_1fr] gap-2 items-baseline">
-                                <span className="font-bold text-slate-400">Objet :</span>
-                                <span>{msg.subject || '(Sans objet)'}</span>
+                              <div className="grid grid-cols-[50px_1fr] gap-1.5 items-baseline">
+                                <span className="font-semibold text-slate-400">Objet :</span>
+                                <span className="font-medium">{msg.subject || '(Sans objet)'}</span>
                               </div>
 
-                              <div className="grid grid-cols-[60px_1fr] gap-2 items-center pt-1 border-t border-inherit">
-                                <span className="font-bold text-slate-400">Sécurité :</span>
-                                <span className="flex items-center gap-1.5 text-emerald-500 font-medium">
-                                  <ShieldCheck className="h-3.5 w-3.5" />
+                              <div className="grid grid-cols-[50px_1fr] gap-1.5 items-center pt-1 border-t border-inherit">
+                                <span className="font-semibold text-slate-400">Sécurité :</span>
+                                <span className="flex items-center gap-1 text-emerald-500 font-medium">
+                                  <ShieldCheck className="h-3 w-3" />
                                   Chiffrement standard (TLS)
                                 </span>
                               </div>
@@ -1050,9 +1482,9 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       </div>
                     </div>
 
-                    {/* Header Right Action Icons (Date, Star, Emoji, Reply, More Menu) */}
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'} mr-1`}>
+                    {/* Header Right Action Icons (Date, Star, Emoji, More Menu) */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className={`text-[11px] sm:text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'} mr-0.5`}>
                         {msg.dateStr}
                       </span>
 
@@ -1060,11 +1492,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       <button
                         type="button"
                         onClick={() => onToggleStar(msg)}
-                        className="p-1.5 rounded-lg hover:bg-slate-500/10 text-slate-400 hover:text-amber-400 transition"
+                        className="p-1 rounded-md hover:bg-slate-500/10 text-slate-400 hover:text-amber-400 transition cursor-pointer"
                         title={msg.isStarred ? 'Suivi' : 'Marquer comme suivi'}
                       >
                         <Star
-                          className={`h-4 w-4 ${
+                          className={`h-3.5 w-3.5 ${
                             msg.isStarred ? 'text-amber-400 fill-amber-400' : ''
                           }`}
                         />
@@ -1077,15 +1509,15 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                           onClick={() =>
                             setActiveEmojiPickerId(activeEmojiPickerId === msg.id ? null : msg.id)
                           }
-                          className="p-1.5 rounded-lg hover:bg-slate-500/10 text-slate-400 hover:text-slate-200 transition"
+                          className="p-1 rounded-md hover:bg-slate-500/10 text-slate-400 hover:text-slate-200 transition cursor-pointer"
                           title="Ajouter une réaction"
                         >
-                          <Smile className="h-4 w-4" />
+                          <Smile className="h-3.5 w-3.5" />
                         </button>
 
                         {activeEmojiPickerId === msg.id && (
                           <div
-                            className={`absolute right-0 top-full mt-1 p-2 rounded-xl shadow-xl border flex items-center gap-1.5 z-30 ${
+                            className={`absolute right-0 top-full mt-1 p-1.5 rounded-xl shadow-xl border flex items-center gap-1 z-30 ${
                               isDark ? 'bg-[#0E131F] border-slate-700' : 'bg-white border-slate-200'
                             }`}
                           >
@@ -1094,7 +1526,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                                 key={emoji}
                                 type="button"
                                 onClick={() => handleAddEmoji(msg.id, emoji)}
-                                className="text-base p-1 rounded hover:bg-slate-500/20 transition hover:scale-125"
+                                className="text-sm p-1 rounded hover:bg-slate-500/20 transition hover:scale-125 cursor-pointer"
                               >
                                 {emoji}
                               </button>
@@ -1103,16 +1535,6 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                         )}
                       </div>
 
-                      {/* Quick Reply Header Arrow */}
-                      <button
-                        type="button"
-                        onClick={() => handleTriggerReply(msg, 'reply')}
-                        className="p-1.5 rounded-lg hover:bg-slate-500/10 text-slate-400 hover:text-cyan-400 transition"
-                        title="Répondre à ce message"
-                      >
-                        <CornerUpLeft className="h-4 w-4" />
-                      </button>
-
                       {/* More Menu (⋮) */}
                       <div className="relative">
                         <button
@@ -1120,10 +1542,10 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                           onClick={() =>
                             setActiveMenuMessageId(activeMenuMessageId === msg.id ? null : msg.id)
                           }
-                          className="p-1.5 rounded-lg hover:bg-slate-500/10 text-slate-400 hover:text-slate-200 transition"
+                          className="p-1 rounded-md hover:bg-slate-500/10 text-slate-400 hover:text-slate-200 transition cursor-pointer"
                           title="Plus d'options"
                         >
-                          <MoreVertical className="h-4 w-4" />
+                          <MoreVertical className="h-3.5 w-3.5" />
                         </button>
 
                         {activeMenuMessageId === msg.id && (
@@ -1140,7 +1562,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                               }}
                               className="flex w-full items-center gap-2.5 px-3.5 py-2 hover:bg-slate-500/10 transition"
                             >
-                              <Reply className="h-3.5 w-3.5 text-cyan-400" />
+                              <CornerUpLeft className="h-3.5 w-3.5 text-cyan-400" />
                               <span>Répondre</span>
                             </button>
 
@@ -1168,18 +1590,18 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                               <span>Transférer</span>
                             </button>
 
-                            <div className="h-px bg-inherit my-1" />
+                            <div className="h-px bg-slate-200 dark:bg-slate-700 my-1" />
 
                             <button
                               type="button"
                               onClick={() => {
-                                window.print();
+                                handlePrint();
                                 setActiveMenuMessageId(null);
                               }}
-                              className="flex w-full items-center gap-2.5 px-3.5 py-2 hover:bg-slate-500/10 transition"
+                              className="flex w-full items-center gap-2.5 px-3.5 py-2 hover:bg-slate-500/10 transition text-slate-400 hover:text-white"
                             >
                               <Printer className="h-3.5 w-3.5 text-slate-400" />
-                              <span>Imprimer ce message</span>
+                              <span>Imprimer</span>
                             </button>
 
                             <button
@@ -1199,56 +1621,135 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                     </div>
                   </div>
 
-                  {/* SMART TRANSLATE BANNER (As seen in Gmail image: "Ce message semble être en anglais...") */}
-                  {showTranslateBanner && (
-                    <div
-                      className={`flex items-center justify-between p-2.5 mb-4 rounded-xl border text-xs ${
-                        isDark
-                          ? 'bg-slate-900/80 border-slate-800 text-slate-300'
-                          : 'bg-slate-100 border-slate-200 text-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Languages className="h-4 w-4 text-cyan-400" />
-                        <span>Ce message est en français.</span>
-                        <button
-                          type="button"
-                          className="font-semibold text-cyan-600 dark:text-cyan-400 hover:underline ml-1"
-                        >
-                          Traduire en : anglais
-                        </button>
-                      </div>
+                  {/* Message Body with Quote Trimming */}
+                  {(() => {
+                    const parsed = parseEmailBodyQuotes(sanitizedMsgHtml, msg.bodyText);
+                    const isQuoteExpanded = trimmedExpanded[msg.id] || false;
 
-                      <button
-                        type="button"
-                        onClick={() => setShowTranslateBanner(false)}
-                        className="p-1 hover:bg-slate-500/10 rounded"
-                        title="Masquer"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  )}
+                    const innerSanitizeConfig = {
+                      ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|data|blob):|[^a-z]|[a-z+.-]+(?:[^a-z+.-]|$))/i,
+                      ADD_ATTR: [
+                        'target', 'style', 'src', 'alt', 'width', 'height', 'class', 'loading', 'srcset', 'align', 'valign',
+                        'color', 'bgcolor', 'background', 'border', 'cellpadding', 'cellspacing', 'face', 'size',
+                        'colspan', 'rowspan', 'dir', 'nowrap', 'id', 'name', 'clear',
+                        'rel', 'title', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd'
+                      ],
+                      ADD_TAGS: ['svg', 'path', 'font', 'center', 'hr', 'br', 'style', 'bdo', 's', 'strike', 'u'],
+                      FORBID_TAGS: ['script', 'iframe', 'form'],
+                    };
 
-                  {/* Message Body */}
-                  <div className="py-2 min-h-[60px]">
-                    {sanitizedMsgHtml ? (
-                      <div
-                        className={`prose prose-sm max-w-none break-words ${
-                          isDark ? 'prose-invert text-slate-200' : 'text-slate-800'
-                        }`}
-                        dangerouslySetInnerHTML={{ __html: sanitizedMsgHtml }}
-                      />
-                    ) : (
-                      <div
-                        className={`text-sm leading-relaxed whitespace-pre-wrap font-sans ${
-                          isDark ? 'text-slate-200' : 'text-slate-800'
-                        }`}
-                      >
-                        {msg.bodyText || '(Corps de message vide)'}
+                    const mainSanitizedHtml = parsed.mainHtml ? DOMPurify.sanitize(parsed.mainHtml, innerSanitizeConfig) : null;
+                    const quotedSanitizedHtml = parsed.quotedHtml ? DOMPurify.sanitize(parsed.quotedHtml, innerSanitizeConfig) : null;
+
+                    return (
+                      <div className="py-0 min-h-[40px]">
+                        {/* Main new message content - preserves original sender colors with compact Gmail-like vertical spacing */}
+                        {mainSanitizedHtml ? (
+                          <div
+                            className={`email-body-content max-w-none break-words text-sm leading-relaxed overflow-x-auto [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_img]:inline-block [&_img]:my-0.5 [&_p]:my-1 [&_div]:my-0 [&_table]:max-w-full [&_table]:my-1 [&>*:last-child]:mb-0 ${
+                              isDark ? 'text-slate-100' : 'text-slate-900'
+                            }`}
+                            dangerouslySetInnerHTML={{ __html: mainSanitizedHtml }}
+                          />
+                        ) : (
+                          <div
+                            className={`email-body-content text-sm leading-relaxed whitespace-pre-wrap font-sans [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline ${
+                              isDark ? 'text-slate-100' : 'text-slate-900'
+                            }`}
+                            dangerouslySetInnerHTML={{
+                              __html: DOMPurify.sanitize(
+                                formatInlineFileLinks(parsed.mainText || msg.bodyText || '(Corps de message vide)'),
+                                innerSanitizeConfig
+                              ),
+                            }}
+                          />
+                        )}
+
+                        {/* Inline Display for Image Attachments (signatures, coordinates, contact cards) */}
+                        {(() => {
+                          const imgAtts = (msg.attachments || []).filter((a) => a.mimeType?.toLowerCase().startsWith('image/'));
+                          if (imgAtts.length === 0) return null;
+                          return (
+                            <div className="my-1.5 flex flex-wrap gap-1.5 items-center">
+                              {imgAtts.map((att) => {
+                                const imgKey = att.contentId || att.filename || att.id;
+                                const imgUrl =
+                                  cidMap[imgKey] ||
+                                  cidMap[imgKey.replace(/^<|>$/g, '')] ||
+                                  (att.data
+                                    ? `data:${att.mimeType};base64,${att.data.replace(/-/g, '+').replace(/_/g, '/')}`
+                                    : null);
+                                if (!imgUrl) return null;
+                                return (
+                                  <img
+                                    key={att.id}
+                                    src={imgUrl}
+                                    alt={att.filename || 'Signature / Image'}
+                                    className="max-w-full max-h-48 object-contain rounded my-0.5 inline-block cursor-pointer hover:opacity-90 transition border border-slate-700/20"
+                                    onClick={() => handlePreviewAttachment(att)}
+                                    title={att.filename || 'Cliquer pour agrandir'}
+                                  />
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Quoted / Historic content toggle if present */}
+                        {parsed.hasQuote && (
+                          <div className="mt-0 pt-0">
+                            {!isQuoteExpanded ? (
+                              <button
+                                type="button"
+                                onClick={() => setTrimmedExpanded((prev) => ({ ...prev, [msg.id]: true }))}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 mt-0.5 rounded-md text-[11px] font-mono font-semibold transition border cursor-pointer ${
+                                  isDark
+                                    ? 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700 hover:text-white'
+                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300 hover:text-black'
+                                }`}
+                                title="Afficher l'historique du message cité"
+                              >
+                                <span className="text-cyan-500 font-bold">···</span>
+                                <span>Afficher le message cité</span>
+                              </button>
+                            ) : (
+                              <div className="space-y-1 border-l-2 border-cyan-500/40 pl-3 mt-1 mb-0">
+                                <div className="flex items-center justify-between pb-0.5">
+                                  <span className="text-[11px] font-mono font-bold text-cyan-500 uppercase tracking-wider">
+                                    — Message cité / Historique des échanges —
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTrimmedExpanded((prev) => ({ ...prev, [msg.id]: false }))}
+                                    className="text-[11px] text-slate-400 hover:text-cyan-400 underline font-mono cursor-pointer"
+                                  >
+                                    Masquer l'historique
+                                  </button>
+                                </div>
+
+                                {quotedSanitizedHtml ? (
+                                  <div
+                                    className={`email-body-content max-w-none break-words opacity-85 text-xs [&>*:last-child]:mb-0 ${
+                                      isDark ? 'text-slate-300' : 'text-slate-700'
+                                    }`}
+                                    dangerouslySetInnerHTML={{ __html: quotedSanitizedHtml }}
+                                  />
+                                ) : (
+                                  <div
+                                    className={`text-xs leading-relaxed whitespace-pre-wrap font-sans opacity-85 ${
+                                      isDark ? 'text-slate-300' : 'text-slate-700'
+                                    }`}
+                                  >
+                                    {parsed.quotedText}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })()}
 
                   {/* Emoji Reactions Pills */}
                   {reactions.length > 0 && (
@@ -1384,82 +1885,71 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                     </div>
                   )}
 
-                  {/* 4 BOTTOM PILL ACTION BUTTONS MATCHING GMAIL EXACTLY */}
-                  {isLastMessage && !showQuickReply && (
-                    <div className="flex flex-wrap items-center gap-3 pt-6 mt-6 border-t border-slate-700/30">
-                      <button
-                        type="button"
-                        onClick={() => handleTriggerReply(msg, 'reply')}
-                        className={`inline-flex items-center gap-2 px-5 py-2 rounded-full border text-xs font-semibold transition active:scale-95 ${
-                          isDark
-                            ? 'border-slate-700 bg-slate-900/60 hover:bg-slate-800 text-slate-200'
-                            : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shadow-2xs'
-                        }`}
-                      >
-                        <CornerUpLeft className="h-4 w-4 text-cyan-400" />
-                        <span>Répondre</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleTriggerReply(msg, 'replyAll')}
-                        className={`inline-flex items-center gap-2 px-5 py-2 rounded-full border text-xs font-semibold transition active:scale-95 ${
-                          isDark
-                            ? 'border-slate-700 bg-slate-900/60 hover:bg-slate-800 text-slate-200'
-                            : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shadow-2xs'
-                        }`}
-                      >
-                        <Users className="h-4 w-4 text-emerald-400" />
-                        <span>Répondre à tous</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => onOpenForward(msg)}
-                        className={`inline-flex items-center gap-2 px-5 py-2 rounded-full border text-xs font-semibold transition active:scale-95 ${
-                          isDark
-                            ? 'border-slate-700 bg-slate-900/60 hover:bg-slate-800 text-slate-200'
-                            : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 shadow-2xs'
-                        }`}
-                      >
-                        <Forward className="h-4 w-4 text-blue-400" />
-                        <span>Transférer</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setActiveEmojiPickerId(activeEmojiPickerId === msg.id ? null : msg.id)
-                        }
-                        className={`p-2 rounded-full border transition ${
-                          isDark
-                            ? 'border-slate-700 bg-slate-900/60 hover:bg-slate-800 text-slate-400'
-                            : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-500'
-                        }`}
-                        title="Ajouter une réaction emoji"
-                      >
-                        <Smile className="h-4 w-4" />
-                      </button>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
           );
         })}
 
+        {/* ALWAYS VISIBLE COMPACT BOTTOM ACTION BAR */}
+        <div className={`mt-3 pt-2.5 border-t ${
+          isDark ? 'border-slate-800' : 'border-slate-200'
+        }`}>
+          {/* ALWAYS VISIBLE BUTTONS ALIGNED BOTTOM LEFT */}
+          <div className="flex flex-wrap items-center justify-start gap-2">
+            <button
+              type="button"
+              onClick={() => handleTriggerReply(threadMessages[threadMessages.length - 1] || email, 'reply')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${
+                isDark
+                  ? 'border-cyan-500/40 bg-cyan-950/30 hover:bg-cyan-900/50 text-cyan-200 hover:text-white shadow-xs'
+                  : 'border-cyan-300 bg-cyan-50 hover:bg-cyan-100 text-cyan-950 shadow-2xs'
+              }`}
+            >
+              <CornerUpLeft className="h-3.5 w-3.5 text-cyan-400" />
+              <span>Répondre</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleTriggerReply(threadMessages[threadMessages.length - 1] || email, 'replyAll')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${
+                isDark
+                  ? 'border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-900/50 text-emerald-200 hover:text-white shadow-xs'
+                  : 'border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-950 shadow-2xs'
+              }`}
+            >
+              <Users className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Répondre à tous</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenForward(threadMessages[threadMessages.length - 1] || email)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${
+                isDark
+                  ? 'border-blue-500/40 bg-blue-950/30 hover:bg-blue-900/50 text-blue-200 hover:text-white shadow-xs'
+                  : 'border-blue-300 bg-blue-50 hover:bg-blue-100 text-blue-950 shadow-2xs'
+              }`}
+            >
+              <Forward className="h-3.5 w-3.5 text-blue-400" />
+              <span>Transférer</span>
+            </button>
+          </div>
+        </div>
+
         {/* EMBEDDED REPLY COMPOSER & AI ASSISTANT BOX */}
         {showQuickReply && (
           <div
             ref={quickReplyRef}
-            className={`rounded-2xl border p-5 sm:p-6 transition-all shadow-xl space-y-4 ${
+            className={`rounded-2xl border p-4 sm:p-5 transition-all shadow-xl space-y-3 ${
               isDark
                 ? 'bg-[#080B10] border-cyan-500/40 shadow-[0_4px_25px_rgba(0,0,0,0.5)]'
                 : 'bg-white border-cyan-300 shadow-lg'
             }`}
           >
             {/* Header of reply box */}
-            <div className="flex items-center justify-between pb-3 border-b border-inherit">
+            <div className="flex items-center justify-between pb-2.5 border-b border-inherit">
               <div className="flex items-center gap-2">
                 <CornerUpLeft className="h-4 w-4 text-cyan-400" />
                 <span className="text-xs font-bold">
@@ -1474,6 +1964,25 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
+                {/* AI Assistant toggle button right in reply header */}
+                <button
+                  type="button"
+                  onClick={() => setShowInlineAi(!showInlineAi)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition cursor-pointer ${
+                    showInlineAi
+                      ? isDark
+                        ? 'bg-cyan-500/20 text-cyan-300 ring-1 ring-cyan-500/60 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
+                        : 'bg-cyan-100 text-cyan-900 ring-1 ring-cyan-400'
+                      : isDark
+                      ? 'bg-slate-800/80 hover:bg-slate-800 text-cyan-400 hover:text-cyan-300 border border-slate-700'
+                      : 'bg-cyan-50 hover:bg-cyan-100 text-cyan-700 border border-cyan-200'
+                  }`}
+                  title="Ouvrir l'assistant IA Gemini à l'intérieur de la case de réponse"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+                  <span>{showInlineAi ? 'Masquer l\'IA' : 'Aide-moi à écrire'}</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() =>
@@ -1481,52 +1990,21 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       ? onOpenForward(replyTargetEmail)
                       : onOpenReply(replyTargetEmail, replyMode)
                   }
-                  className="text-xs font-mono text-cyan-500 hover:underline"
+                  className="text-xs font-mono text-cyan-500 hover:underline cursor-pointer"
                 >
                   Plein écran
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowQuickReply(false)}
-                  className="p-1 rounded hover:bg-slate-500/20 text-slate-400"
+                  className="p-1 rounded hover:bg-slate-500/20 text-slate-400 cursor-pointer"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
             </div>
 
-            {/* Smart Reply Suggestions Pills */}
-            {suggestions.length > 0 && (
-              <div className="space-y-1.5">
-                <span className="text-[10px] font-mono uppercase text-slate-400 font-bold flex items-center gap-1">
-                  <Sparkles className="h-3 w-3 text-cyan-400" />
-                  Suggestions intelligentes Gemini :
-                </span>
-                <div className="flex flex-wrap gap-2">
-                  {suggestions.map((sugg, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      onClick={() => handleApplySuggestion(sugg)}
-                      className={`text-left px-3 py-1.5 rounded-lg text-xs transition border flex items-center gap-2 ${
-                        isDark
-                          ? 'bg-slate-900 border-cyan-500/30 hover:border-cyan-400 text-slate-200 hover:bg-slate-800'
-                          : 'bg-slate-50 border-blue-200 hover:border-blue-400 text-slate-800 hover:bg-blue-50'
-                      }`}
-                    >
-                      <span className="font-bold text-[11px] text-cyan-400 font-mono">
-                        {sugg.label} :
-                      </span>
-                      <span className="text-[11px] text-slate-400 truncate max-w-xs">
-                        {sugg.replyText}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Reply Input */}
+            {/* Reply Input Form with Integrated AI */}
             <form onSubmit={handleSendQuickReply} className="space-y-3">
               {/* CC / BCC Toggle & Inputs */}
               <div className="space-y-2">
@@ -1539,7 +2017,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       <button
                         type="button"
                         onClick={() => setShowQuickReplyCc(true)}
-                        className="text-cyan-500 hover:underline uppercase text-[10px]"
+                        className="text-cyan-500 hover:underline uppercase text-[10px] cursor-pointer"
                       >
                         + Cc
                       </button>
@@ -1548,7 +2026,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       <button
                         type="button"
                         onClick={() => setShowQuickReplyBcc(true)}
-                        className="text-cyan-500 hover:underline uppercase text-[10px]"
+                        className="text-cyan-500 hover:underline uppercase text-[10px] cursor-pointer"
                       >
                         + Cci
                       </button>
@@ -1587,26 +2065,182 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                 )}
               </div>
 
-              <textarea
-                rows={5}
-                placeholder="Rédigez votre réponse..."
+              {/* INLINE GEMINI AI ASSISTANT DRAWER (Ultra-compact, space-saving) */}
+              {showInlineAi && (
+                <div
+                  className={`p-2 sm:p-2.5 rounded-xl border space-y-1.5 transition-all ${
+                    isDark
+                      ? 'bg-[#080D1A]/90 border-cyan-500/30 shadow-xs'
+                      : 'bg-cyan-50/50 border-cyan-200 shadow-xs'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5 text-xs font-mono font-bold text-cyan-400">
+                      <Sparkles className="h-3 w-3 text-cyan-400" />
+                      <span>Rédiger avec Gemini</span>
+                      <span
+                        className={`text-[10px] font-mono px-1 py-0.5 rounded border hidden sm:inline ${
+                          isDark
+                            ? 'bg-cyan-950/80 border-cyan-800/60 text-cyan-300'
+                            : 'bg-white border-cyan-200 text-cyan-900'
+                        }`}
+                        title="Langue détectée"
+                      >
+                        {detectedEmailLang}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {/* Thread message selector if multi-message thread */}
+                      {threadMessages.length > 1 && (
+                        <select
+                          value={replyTargetEmail.id}
+                          onChange={(e) => {
+                            const selected = threadMessages.find((m) => m.id === e.target.value);
+                            if (selected) setReplyTargetEmail(selected);
+                          }}
+                          className={`h-6 px-1 rounded text-[10px] font-sans border outline-none ${
+                            isDark ? 'bg-[#0E131F] border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'
+                          }`}
+                          title="Message cible"
+                        >
+                          {threadMessages.map((m, i) => (
+                            <option key={m.id} value={m.id}>
+                              #{i + 1} ({resolveContactDisplayName(m.fromEmail, m.fromName)})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      {/* Tone Selector */}
+                      <select
+                        value={inlineAiTone}
+                        onChange={(e) => setInlineAiTone(e.target.value as AiTone)}
+                        className={`h-6 px-1 rounded text-[10px] font-mono border outline-none cursor-pointer ${
+                          isDark ? 'bg-[#0E131F] border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'
+                        }`}
+                        title="Ton de la réponse"
+                      >
+                        {TONES.map((t) => (
+                          <option key={t.code} value={t.code}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Language Selector */}
+                      <select
+                        value={inlineAiLanguage}
+                        onChange={(e) => setInlineAiLanguage(e.target.value as AiLanguage)}
+                        className={`h-6 px-1 rounded text-[10px] font-mono border outline-none cursor-pointer font-bold ${
+                          isDark ? 'bg-[#0E131F] border-slate-700 text-cyan-300' : 'bg-white border-cyan-300 text-cyan-900'
+                        }`}
+                        title={`Langue de la réponse IA (détectée : ${detectedEmailLang})`}
+                      >
+                        {LANGUAGES.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.flag} {l.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowInlineAi(false)}
+                        className="text-slate-400 hover:text-slate-200 p-0.5 cursor-pointer ml-0.5"
+                        title="Fermer"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Prompt input row with integrated quick models */}
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={customAiPrompt}
+                      onChange={(e) => setCustomAiPrompt(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleGenerateCustomReply();
+                        }
+                      }}
+                      placeholder="Consigne : ex. Remercier et confirmer la date..."
+                      className={`flex-1 h-7.5 px-2.5 text-xs rounded-lg border outline-none font-sans ${
+                        isDark
+                          ? 'bg-[#05070A] border-slate-700 text-white placeholder-slate-500 focus:border-cyan-400'
+                          : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-cyan-600'
+                      }`}
+                    />
+
+                    {/* Compact quick template selector */}
+                    <select
+                      defaultValue=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handleGenerateCustomReply(e.target.value);
+                          e.target.value = '';
+                        }
+                      }}
+                      disabled={isGeneratingCustomReply}
+                      className={`h-7.5 px-2 rounded-lg text-[11px] font-mono border outline-none cursor-pointer shrink-0 ${
+                        isDark
+                          ? 'bg-slate-800/90 border-slate-700 text-cyan-300 hover:text-white'
+                          : 'bg-white border-slate-300 text-cyan-900 hover:bg-slate-50'
+                      }`}
+                      title="Sélectionner un modèle rapide"
+                    >
+                      <option value="" disabled>Modèle rapide...</option>
+                      <option value="Remercie chaleureusement et confirme que tout est validé.">Remercier & Valider</option>
+                      <option value="Remercie pour le message et demande courtoisement un délai supplémentaire de 48 heures.">Demander un délai</option>
+                      <option value="Remercie pour la proposition mais décline poliment pour le moment avec bienveillance.">Décliner poliment</option>
+                      <option value="Accuse réception avec intérêt et demande des détails complémentaires sur les prochaines étapes.">Demander des détails</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateCustomReply()}
+                      disabled={isGeneratingCustomReply || !customAiPrompt.trim()}
+                      className="inline-flex items-center gap-1 h-7.5 px-3 rounded-lg text-xs font-mono font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition active:scale-95 disabled:opacity-50 cursor-pointer shrink-0"
+                    >
+                      {isGeneratingCustomReply ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <span className="hidden sm:inline">Génération...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-3 w-3" />
+                          <span>Générer</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Rich Text & Color Editor for Quick Reply with Toolbar AI Button */}
+              <RichTextEmailEditor
+                id="quick-reply-editor"
                 value={quickReplyText}
-                onChange={(e) => setQuickReplyText(e.target.value)}
-                className={`w-full p-4 text-xs rounded-xl border outline-none font-sans leading-relaxed resize-y ${
-                  isDark
-                    ? 'bg-[#05070A] border-slate-700 text-white placeholder-slate-500 focus:border-cyan-400'
-                    : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-cyan-600'
-                }`}
+                onChange={setQuickReplyText}
+                placeholder="Rédigez votre réponse ici (saisie en couleur, surlignage et styles autorisés)..."
+                minHeight="140px"
+                onToggleAi={() => setShowInlineAi(!showInlineAi)}
+                isAiActive={showInlineAi}
+                aiButtonLabel="Aide-moi à écrire"
               />
 
               {/* Bottom bar with AI polishing + Signature toggle + Send */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                {/* AI style chips */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[10px] font-mono uppercase text-slate-500 mr-1">IA :</span>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5">
+                {/* AI style micro-chips */}
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] font-mono uppercase text-slate-500 mr-0.5">IA :</span>
                   {(
                     [
-                      { id: 'professional' as const, label: 'Professionnel' },
+                      { id: 'professional' as const, label: 'Pro' },
                       { id: 'concise' as const, label: 'Concis' },
                       { id: 'proofread' as const, label: 'Corriger' },
                     ]
@@ -1616,7 +2250,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       type="button"
                       onClick={() => handleImproveQuickReply(action.id)}
                       disabled={isImprovingText || !quickReplyText.trim()}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-mono transition border disabled:opacity-40 ${
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono transition border disabled:opacity-40 cursor-pointer ${
                         isDark
                           ? 'bg-slate-800/80 border-slate-700 text-slate-300 hover:text-white'
                           : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200'
@@ -1625,31 +2259,31 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                       {action.label}
                     </button>
                   ))}
-                  {isImprovingText && <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-400 ml-1" />}
+                  {isImprovingText && <Loader2 className="h-3 w-3 animate-spin text-cyan-400 ml-1" />}
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2">
                   {/* Signature automatic indicator */}
                   <div
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono select-none ${
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-mono select-none ${
                       isDark
                         ? 'bg-cyan-950/40 border border-cyan-500/30 text-cyan-300/90'
                         : 'bg-blue-50 border border-blue-200 text-blue-700/90'
                     }`}
                     title="Votre signature par défaut est automatiquement ajoutée à votre envoi"
                   >
-                    <FileSignature className="h-3.5 w-3.5" />
-                    <span>Signature auto</span>
-                    <Check className="h-3 w-3 text-cyan-400" />
+                    <FileSignature className="h-3 w-3" />
+                    <span className="hidden sm:inline">Signature</span>
+                    <Check className="h-2.5 w-2.5 text-cyan-400" />
                   </div>
 
                   {/* Send button */}
                   <button
                     type="submit"
                     disabled={!quickReplyText.trim()}
-                    className="inline-flex items-center gap-2 px-6 py-2 rounded-xl text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition active:scale-95 shadow-md disabled:opacity-50"
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition active:scale-95 shadow-xs disabled:opacity-50 cursor-pointer"
                   >
-                    <Send className="h-3.5 w-3.5" />
+                    <Send className="h-3 w-3" />
                     <span>Envoyer</span>
                   </button>
                 </div>

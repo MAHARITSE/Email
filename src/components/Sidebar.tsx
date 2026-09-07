@@ -11,11 +11,9 @@ import {
   ChevronDown,
   ChevronRight,
   Paperclip,
-  Briefcase,
-  User,
-  Globe,
   Users,
   FileSignature,
+  CalendarDays,
 } from 'lucide-react';
 import { GmailLabel } from '../types/gmail';
 import { useTheme } from '../context/ThemeContext';
@@ -24,18 +22,20 @@ import { EmailCategory } from '../services/emailClassifier';
 interface SidebarProps {
   selectedLabelId: string;
   onSelectLabel: (labelId: string) => void;
-  selectedCategory: EmailCategory;
-  onSelectCategory: (cat: EmailCategory) => void;
+  selectedCategory?: EmailCategory;
+  onSelectCategory?: (cat: EmailCategory) => void;
   labels: GmailLabel[];
   onOpenCompose: () => void;
   isOpenMobile: boolean;
   onCloseMobile: () => void;
   unreadCount: number;
-  categoryCounts?: { pro: number; personal: number; sites: number };
+  categoryCounts?: { pro: number; personal: number; sites: number; other: number };
   onOpenContacts?: () => void;
   contactsCount?: number;
   onOpenSignatures?: () => void;
   signaturesCount?: number;
+  onOpenAgenda?: () => void;
+  agendaCount?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -48,11 +48,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpenMobile,
   onCloseMobile,
   unreadCount,
-  categoryCounts = { pro: 0, personal: 0, sites: 0 },
+  categoryCounts = { pro: 0, personal: 0, sites: 0, other: 0 },
   onOpenContacts,
   contactsCount = 0,
   onOpenSignatures,
   signaturesCount = 0,
+  onOpenAgenda,
+  agendaCount = 0,
 }) => {
   const { isDark } = useTheme();
   const [showCustomLabels, setShowCustomLabels] = React.useState(true);
@@ -88,13 +90,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'TRASH', name: 'Corbeille', icon: Trash2, count: trashUnread },
   ];
 
-  // Smart Categories
-  const smartCategories: Array<{ id: EmailCategory; name: string; icon: any; count: number; colorDark: string; colorLight: string }> = [
-    { id: 'pro', name: 'Professionnels', icon: Briefcase, count: categoryCounts.pro, colorDark: 'text-cyan-400', colorLight: 'text-blue-600' },
-    { id: 'personal', name: 'Personnels', icon: User, count: categoryCounts.personal, colorDark: 'text-emerald-400', colorLight: 'text-emerald-600' },
-    { id: 'sites', name: 'Sites & Abonnements', icon: Globe, count: categoryCounts.sites, colorDark: 'text-violet-400', colorLight: 'text-violet-600' },
-  ];
-
   // User custom labels
   const userLabels = labels.filter(
     (l) => l.type === 'user' && !['CHAT', 'UNREAD', 'IMPORTANT'].includes(l.id)
@@ -105,24 +100,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onCloseMobile();
   };
 
-  const handleCategoryClick = (cat: EmailCategory) => {
-    if (selectedLabelId === 'ATTACHMENTS') {
-      onSelectLabel('INBOX');
-    }
-    onSelectCategory(selectedCategory === cat ? 'all' : cat);
-    onCloseMobile();
-  };
-
   const content = (
     <div
-      className={`flex h-full flex-col border-r select-none transition-colors ${
+      className={`flex h-full min-h-0 flex-col border-r select-none transition-colors ${
         isDark
           ? 'bg-[#080B10] border-slate-800 text-slate-400'
           : 'bg-white border-slate-200 text-slate-600'
       }`}
     >
       {/* Compose Button */}
-      <div className="p-4">
+      <div className="border-b border-inherit p-3 sm:p-4">
         <button
           id="sidebar-compose-button"
           type="button"
@@ -194,57 +181,48 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
 
-        {/* Smart Categories Section */}
-        <div className="pt-4">
-          <div className={`px-2 pb-1 text-[9px] font-mono uppercase tracking-widest ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-            Filtres intelligents
-          </div>
-          <div className="space-y-1">
-            {smartCategories.map((cat) => {
-              const Icon = cat.icon;
-              const isSelected = selectedCategory === cat.id && selectedLabelId !== 'ATTACHMENTS';
-              return (
-                <button
-                  key={cat.id}
-                  id={`nav-category-${cat.id}`}
-                  type="button"
-                  onClick={() => handleCategoryClick(cat.id)}
-                  className={`flex w-full items-center justify-between rounded-lg px-3.5 py-2 text-xs font-medium transition ${
-                    isSelected
-                      ? isDark
-                        ? 'bg-slate-800 border border-cyan-500/30 text-white font-semibold'
-                        : 'bg-slate-100 border border-slate-300 text-slate-900 font-semibold'
-                      : isDark
-                      ? 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200 border border-transparent'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Icon className={`h-4 w-4 ${isDark ? cat.colorDark : cat.colorLight}`} />
-                    <span>{cat.name}</span>
-                  </div>
-                  {cat.count > 0 && (
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] font-mono font-semibold ${
-                        isDark ? 'bg-slate-800/80 text-slate-400' : 'bg-slate-200 text-slate-700'
-                      }`}
-                    >
-                      {cat.count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-
         {/* Tools & Settings Section */}
         <div className="pt-4">
           <div className={`px-2 pb-1 text-[9px] font-mono uppercase tracking-widest ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
             Gestion & Outils
           </div>
           <div className="space-y-1">
+            {onOpenAgenda && (
+              <button
+                type="button"
+                id="nav-open-agenda-btn"
+                onClick={() => {
+                  onOpenAgenda();
+                  onCloseMobile();
+                }}
+                className={`flex w-full items-center justify-between rounded-lg px-3.5 py-2 text-xs font-medium transition cursor-pointer ${
+                  selectedLabelId === 'AGENDA'
+                    ? isDark
+                      ? 'bg-slate-800 border border-cyan-500/30 text-white font-semibold'
+                      : 'bg-slate-100 border border-slate-300 text-slate-900 font-semibold'
+                    : isDark
+                    ? 'text-slate-400 hover:bg-slate-800/60 hover:text-cyan-400 border border-transparent'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-cyan-700 border border-transparent'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <CalendarDays className="h-4 w-4 text-cyan-400" />
+                  <span>Agenda & Tâches</span>
+                </div>
+                {agendaCount > 0 && (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-mono font-bold ${
+                      isDark
+                        ? 'bg-cyan-950 border border-cyan-800/80 text-cyan-300'
+                        : 'bg-cyan-100 border border-cyan-300 text-cyan-900'
+                    }`}
+                  >
+                    {agendaCount}
+                  </span>
+                )}
+              </button>
+            )}
+
             {onOpenContacts && (
               <button
                 type="button"
@@ -253,8 +231,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onOpenContacts();
                   onCloseMobile();
                 }}
-                className={`flex w-full items-center justify-between rounded-lg px-3.5 py-2 text-xs font-medium transition ${
-                  isDark
+                className={`flex w-full items-center justify-between rounded-lg px-3.5 py-2 text-xs font-medium transition cursor-pointer ${
+                  selectedLabelId === 'CONTACTS'
+                    ? isDark
+                      ? 'bg-slate-800 border border-cyan-500/30 text-white font-semibold'
+                      : 'bg-slate-100 border border-slate-300 text-slate-900 font-semibold'
+                    : isDark
                     ? 'text-slate-400 hover:bg-slate-800/60 hover:text-cyan-400 border border-transparent'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-cyan-700 border border-transparent'
                 }`}
@@ -279,7 +261,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onOpenSignatures();
                   onCloseMobile();
                 }}
-                className={`flex w-full items-center justify-between rounded-lg px-3.5 py-2 text-xs font-medium transition ${
+                className={`flex w-full items-center justify-between rounded-lg px-3.5 py-2 text-xs font-medium transition cursor-pointer ${
                   isDark
                     ? 'text-slate-400 hover:bg-slate-800/60 hover:text-cyan-400 border border-transparent'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-cyan-700 border border-transparent'
@@ -321,7 +303,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Desktop Sidebar */}
       <aside
         id="desktop-sidebar"
-        className="hidden md:block w-64 shrink-0 h-[calc(100vh-64px)]"
+        className="hidden md:block h-full min-h-0 w-64 shrink-0"
       >
         {content}
       </aside>

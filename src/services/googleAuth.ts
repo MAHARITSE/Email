@@ -8,6 +8,13 @@ import {
   SCOPES,
 } from './firebaseAuth';
 import firebaseConfig from '../../firebase-applet-config.json';
+import {
+  saveOrUpdateAccount,
+  getStoredAccounts,
+  getActiveAccountEmail,
+  setActiveAccountEmail,
+  clearAllAccountsStorage,
+} from './multiAccountService';
 
 export interface AuthenticatedUser {
   uid: string;
@@ -22,13 +29,48 @@ const USER_STORAGE_KEY = 'gmail_net_oauth_user_profile';
 let cachedToken: string | null = null;
 let cachedUser: AuthenticatedUser | null = null;
 
-// Try to recover token & user from sessionStorage on load
+export function setCachedUserAndToken(user: AuthenticatedUser | null, token: string | null) {
+  cachedUser = user;
+  cachedToken = token;
+  if (typeof window !== 'undefined') {
+    try {
+      if (token && user) {
+        window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+        window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+        window.sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+        window.sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+        if (user.email) setActiveAccountEmail(user.email);
+      } else {
+        window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+        window.localStorage.removeItem(USER_STORAGE_KEY);
+        window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+        window.sessionStorage.removeItem(USER_STORAGE_KEY);
+      }
+    } catch {}
+  }
+}
+
+// Try to recover active account from persistent localStorage multi-accounts or localStorage on load
 if (typeof window !== 'undefined') {
   try {
-    cachedToken = window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
-    const storedUser = window.sessionStorage.getItem(USER_STORAGE_KEY);
-    if (storedUser) {
-      cachedUser = JSON.parse(storedUser);
+    const storedAccounts = getStoredAccounts();
+    const activeEmail = getActiveAccountEmail();
+    let foundAccount = activeEmail
+      ? storedAccounts.find((a) => a.user.email?.toLowerCase() === activeEmail.toLowerCase())
+      : null;
+    if (!foundAccount && storedAccounts.length > 0) {
+      foundAccount = storedAccounts[0];
+    }
+
+    if (foundAccount) {
+      cachedToken = foundAccount.token;
+      cachedUser = foundAccount.user;
+    } else {
+      cachedToken = window.localStorage.getItem(TOKEN_STORAGE_KEY) || window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
+      const storedUser = window.localStorage.getItem(USER_STORAGE_KEY) || window.sessionStorage.getItem(USER_STORAGE_KEY);
+      if (storedUser) {
+        cachedUser = JSON.parse(storedUser);
+      }
     }
   } catch {
     // Ignore storage restrictions
@@ -102,7 +144,11 @@ async function waitForGsi(timeoutMs = 4000): Promise<boolean> {
  */
 export async function signInWithGoogleGsi(): Promise<{ user: AuthenticatedUser; accessToken: string }> {
   const isGsiAvailable = await waitForGsi(2500);
-  const clientId = firebaseConfig.oAuthClientId;
+  const customClientId = typeof window !== 'undefined' ? window.localStorage.getItem('custom_google_client_id') : null;
+  const clientId =
+    customClientId?.trim() ||
+    (firebaseConfig as any).oAuthClientId ||
+    (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID : undefined);
 
   if (!isGsiAvailable || !clientId) {
     throw new Error('GSI_UNAVAILABLE');
@@ -120,8 +166,18 @@ export async function signInWithGoogleGsi(): Promise<{ user: AuthenticatedUser; 
           if (isResolved) return;
           if (response.error) {
             isResolved = true;
-            if (response.error === 'popup_closed_by_user' || response.error === 'access_denied') {
+            if (
+              response.error === 'popup_closed_by_user' ||
+              response.error === 'popup_closed' ||
+              response.error === 'cancelled' ||
+              response.error === 'popup_blocked_by_browser'
+            ) {
               reject(new Error('POPUP_CLOSED'));
+            } else if (response.error === 'access_denied' || response.error_description?.includes('access_denied')) {
+              reject(new Error('ACCESS_DENIED'));
+            } else if (response.error === 'origin_mismatch' || response.error_description?.includes('origin_mismatch')) {
+              const origin = typeof window !== 'undefined' ? window.location.origin : '';
+              reject(new Error(`ORIGIN_MISMATCH:${origin}`));
             } else {
               reject(new Error(response.error_description || response.error));
             }
@@ -139,6 +195,7 @@ export async function signInWithGoogleGsi(): Promise<{ user: AuthenticatedUser; 
             const user = await fetchGoogleUserInfo(accessToken);
             cachedToken = accessToken;
             cachedUser = user;
+            saveOrUpdateAccount(user, accessToken);
             try {
               window.sessionStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
               window.sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
@@ -153,7 +210,12 @@ export async function signInWithGoogleGsi(): Promise<{ user: AuthenticatedUser; 
         error_callback: (err: any) => {
           if (isResolved) return;
           isResolved = true;
-          if (err?.type === 'popup_closed') {
+          if (
+            err?.type === 'popup_closed' ||
+            err?.type === 'popup_failed_to_open' ||
+            err?.type === 'popup_blocked' ||
+            (typeof err?.message === 'string' && err.message.toLowerCase().includes('popup'))
+          ) {
             reject(new Error('POPUP_CLOSED'));
           } else {
             reject(new Error(err?.message || 'Erreur d\'autorisation Google'));
@@ -161,12 +223,31 @@ export async function signInWithGoogleGsi(): Promise<{ user: AuthenticatedUser; 
         },
       });
 
-      // Request token with prompt
-      client.requestAccessToken({ prompt: '' });
+      // Request token with select_account prompt so Google always shows account picker
+      client.requestAccessToken({ prompt: 'select_account' });
     } catch (err) {
       reject(err);
     }
   });
+}
+
+/**
+ * Sign in directly using a provided Google OAuth Access Token
+ */
+export async function signInWithAccessToken(tokenInput: string): Promise<{ user: AuthenticatedUser; accessToken: string }> {
+  const cleanToken = tokenInput.trim();
+  if (!cleanToken) {
+    throw new Error('Jeton d\'accès invalide ou vide.');
+  }
+  const user = await fetchGoogleUserInfo(cleanToken);
+  cachedToken = cleanToken;
+  cachedUser = user;
+  saveOrUpdateAccount(user, cleanToken);
+  try {
+    window.sessionStorage.setItem(TOKEN_STORAGE_KEY, cleanToken);
+    window.sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+  } catch {}
+  return { user, accessToken: cleanToken };
 }
 
 /**
@@ -181,8 +262,19 @@ export async function universalSignIn(): Promise<{ user: AuthenticatedUser; acce
         'La fenêtre de connexion Google a été fermée avant la validation. Veuillez cliquer sur S\'authentifier et sélectionner votre compte.'
       );
     }
+    if (gsiError?.message === 'ACCESS_DENIED' || gsiError?.message?.includes('access_denied')) {
+      throw new Error(
+        'ACCES_DENIED: L\'application Google OAuth est en mode test. Votre compte n\'est pas encore enregistré dans les Utilisateurs de test sur Google Cloud Console. Ajoutez votre adresse e-mail dans Google Cloud Console → Écran de consentement OAuth → Utilisateurs de test.'
+      );
+    }
+    if (gsiError?.message?.startsWith('ORIGIN_MISMATCH')) {
+      const origin = gsiError.message.split('ORIGIN_MISMATCH:')[1] || (typeof window !== 'undefined' ? window.location.origin : '');
+      throw new Error(
+        `Origine JavaScript non autorisée (Erreur 400 origin_mismatch) : Veuillez ajouter « ${origin} » dans Google Cloud Console → Client OAuth 2.0 → Origines JavaScript autorisées.`
+      );
+    }
 
-    console.warn('GSI flow encountered issue, falling back to Firebase Auth:', gsiError);
+    console.warn('GSI flow encountered non-popup issue, trying fallback auth:', gsiError);
     // Fallback to Firebase Auth
     try {
       const fbResult = await firebaseGoogleSignIn();
@@ -250,6 +342,7 @@ export function initUniversalAuth(
 export async function universalLogout() {
   cachedToken = null;
   cachedUser = null;
+  clearAllAccountsStorage();
   try {
     if (typeof window !== 'undefined') {
       window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);

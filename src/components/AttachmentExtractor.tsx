@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   FileText,
   FileSpreadsheet,
@@ -34,6 +34,79 @@ import {
 } from '../services/gmailApi';
 import { DocumentPreviewModal } from './DocumentPreviewModal';
 import { suggestContacts, LocalContact } from '../services/contactsService';
+
+const ImageThumbnail: React.FC<{
+  token: string;
+  attachment: EmailAttachment;
+  isDark: boolean;
+  className?: string;
+}> = ({ token, attachment, isDark, className = '' }) => {
+  const [srcUrl, setSrcUrl] = useState<string | null>(() => {
+    if (attachment.data) {
+      return `data:${attachment.mimeType || 'image/png'};base64,${attachment.data.replace(/-/g, '+').replace(/_/g, '/')}`;
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState<boolean>(!attachment.data);
+  const [error, setError] = useState<boolean>(false);
+
+  useEffect(() => {
+    let active = true;
+    let createdUrl: string | null = null;
+
+    if (!srcUrl && !error) {
+      setLoading(true);
+      getAttachmentBytes(token, attachment.messageId, attachment.attachmentId, attachment.data)
+        .then((bytes) => {
+          if (!active) return;
+          const blob = new Blob([bytes], { type: attachment.mimeType || 'image/png' });
+          createdUrl = URL.createObjectURL(blob);
+          setSrcUrl(createdUrl);
+        })
+        .catch((err) => {
+          if (!active) return;
+          console.warn('Failed loading image thumbnail:', err);
+          setError(true);
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    }
+
+    return () => {
+      active = false;
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [attachment, token, srcUrl, error]);
+
+  if (loading) {
+    return (
+      <div className={`flex items-center justify-center bg-slate-800/40 rounded-lg ${className}`}>
+        <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
+      </div>
+    );
+  }
+
+  if (error || !srcUrl) {
+    return (
+      <div className={`flex flex-col items-center justify-center bg-slate-800/20 text-slate-500 rounded-lg ${className}`}>
+        <ImageIcon className="w-6 h-6 mb-1 text-violet-400 opacity-60" />
+        <span className="text-[10px] font-mono">Image</span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={srcUrl}
+      alt={attachment.filename}
+      className={`object-cover rounded-lg w-full h-full ${className}`}
+      loading="lazy"
+    />
+  );
+};
 
 interface AttachmentExtractorProps {
   token: string;
@@ -670,22 +743,51 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                   }`}
                 >
                   <div>
-                    {/* Header: Icon + Select Checkbox */}
-                    <div className="flex items-start justify-between gap-2 mb-3">
-                      <div className="p-2.5 rounded-xl bg-slate-800/30 border border-slate-700/40 shrink-0">
-                        {getFileIcon(cat)}
+                    {/* Header: Image Thumbnail or Icon + Select Checkbox */}
+                    {cat === 'images' ? (
+                      <div className="relative w-full h-36 mb-3 rounded-lg overflow-hidden border border-slate-700/50 bg-slate-900/80 group/img">
+                        <ImageThumbnail token={token} attachment={att} isDark={isDark} />
+                        <div
+                          onClick={() => handleOpenPreview(att)}
+                          className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <span className="px-2.5 py-1 rounded-md bg-cyan-600 text-white text-[11px] font-bold flex items-center gap-1 shadow-md">
+                            <Eye className="w-3.5 h-3.5" /> Aperçu
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSelect(att.id);
+                          }}
+                          className={`absolute top-2 right-2 p-1.5 rounded-lg backdrop-blur-md transition ${
+                            isSelected
+                              ? 'bg-cyan-500 text-slate-950 font-bold'
+                              : 'bg-black/60 text-white hover:bg-black/80'
+                          }`}
+                          title={isSelected ? 'Désélectionner' : 'Sélectionner'}
+                        >
+                          {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => toggleSelect(att.id)}
-                        className={`p-1 rounded-md transition ${
-                          isSelected ? 'text-cyan-400' : 'text-slate-500 hover:text-slate-300'
-                        }`}
-                        title={isSelected ? 'Désélectionner' : 'Sélectionner'}
-                      >
-                        {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
-                      </button>
-                    </div>
+                    ) : (
+                      <div className="flex items-start justify-between gap-2 mb-3">
+                        <div className="p-2.5 rounded-xl bg-slate-800/30 border border-slate-700/40 shrink-0">
+                          {getFileIcon(cat)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => toggleSelect(att.id)}
+                          className={`p-1 rounded-md transition ${
+                            isSelected ? 'text-cyan-400' : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                          title={isSelected ? 'Désélectionner' : 'Sélectionner'}
+                        >
+                          {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    )}
 
                     {/* Filename & Info */}
                     <h3
@@ -819,8 +921,18 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                         </button>
                       </td>
                       <td className="p-3">
-                        <div className="flex items-center gap-2.5">
-                          {getFileIcon(cat)}
+                        <div className="flex items-center gap-3">
+                          {cat === 'images' ? (
+                            <div
+                              onClick={() => handleOpenPreview(att)}
+                              className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-slate-700/60 bg-slate-900 cursor-pointer hover:ring-2 hover:ring-cyan-400 transition"
+                              title="Cliquer pour afficher l'aperçu"
+                            >
+                              <ImageThumbnail token={token} attachment={att} isDark={isDark} />
+                            </div>
+                          ) : (
+                            getFileIcon(cat)
+                          )}
                           <span className="font-semibold truncate max-w-xs" title={att.filename}>
                             {att.filename}
                           </span>
