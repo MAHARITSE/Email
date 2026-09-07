@@ -528,12 +528,31 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Failed to update read state', err);
-      // Revert
+      // Revert both the message and the counters when Gmail rejects the update.
       setEmails((prev) =>
         prev.map((m) =>
           m.id === email.id ? { ...m, isUnread: !newUnread } : m
         )
       );
+      setSelectedEmail((prev) =>
+        prev?.id === email.id ? { ...prev, isUnread: !newUnread } : prev
+      );
+      setLabels((prevLabels) =>
+        prevLabels.map((lbl) => {
+          if (lbl.id === 'INBOX' || (email.labelIds && email.labelIds.includes(lbl.id))) {
+            const delta = newUnread ? -1 : 1;
+            const curThreads = typeof lbl.threadsUnread === 'number' ? lbl.threadsUnread : (lbl.messagesUnread || 0);
+            const curMsgs = typeof lbl.messagesUnread === 'number' ? lbl.messagesUnread : (lbl.threadsUnread || 0);
+            return {
+              ...lbl,
+              threadsUnread: Math.max(0, curThreads + delta),
+              messagesUnread: Math.max(0, curMsgs + delta),
+            };
+          }
+          return lbl;
+        })
+      );
+      showToast('Impossible de mettre à jour ce courriel');
     }
   };
 
@@ -581,7 +600,10 @@ export default function App() {
 
   // Selection of Email item
   const handleSelectEmail = (email: ParsedEmail) => {
-    setSelectedEmail(email);
+    // Keep the detail view in sync with the optimistic list update. Previously an
+    // unread message stayed visually unread in the detail header until a refresh.
+    const openedEmail = email.isUnread ? { ...email, isUnread: false } : email;
+    setSelectedEmail(openedEmail);
     // If unread, mark as read automatically & update inbox unread count directly
     if (email.isUnread) {
       setEmails((prev) =>
@@ -602,7 +624,29 @@ export default function App() {
         })
       );
       if (token) {
-        modifyLabels(token, email.id, { removeLabelIds: ['UNREAD'] }).catch(() => null);
+        modifyLabels(token, email.id, { removeLabelIds: ['UNREAD'] }).catch(() => {
+          setEmails((prev) =>
+            prev.map((m) => (m.id === email.id ? { ...m, isUnread: true } : m))
+          );
+          setSelectedEmail((prev) =>
+            prev?.id === email.id ? { ...prev, isUnread: true } : prev
+          );
+          setLabels((prevLabels) =>
+            prevLabels.map((lbl) => {
+              if (lbl.id === 'INBOX' || (email.labelIds && email.labelIds.includes(lbl.id))) {
+                const curThreads = typeof lbl.threadsUnread === 'number' ? lbl.threadsUnread : (lbl.messagesUnread || 0);
+                const curMsgs = typeof lbl.messagesUnread === 'number' ? lbl.messagesUnread : (lbl.threadsUnread || 0);
+                return {
+                  ...lbl,
+                  threadsUnread: curThreads + 1,
+                  messagesUnread: curMsgs + 1,
+                };
+              }
+              return lbl;
+            })
+          );
+          showToast('Le message reste non lu : synchronisation impossible');
+        });
       }
     }
   };
@@ -819,7 +863,7 @@ export default function App() {
       {toastMessage && (
         <div
           id="app-toast-notification"
-          className={`fixed bottom-12 right-6 z-50 flex items-center gap-2.5 rounded-lg px-4 py-3 text-xs font-mono font-medium shadow-xl animate-fade-in ${
+          className={`fixed bottom-20 right-4 sm:right-6 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-xl px-4 py-3 text-xs font-mono font-medium shadow-xl animate-fade-in ${
             isDark
               ? 'bg-[#080B10] border border-cyan-500/40 text-cyan-300 shadow-[0_0_20px_rgba(34,211,238,0.2)]'
               : 'bg-white border border-slate-300 text-slate-900 shadow-md'
@@ -837,6 +881,10 @@ export default function App() {
         accounts={accounts}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        onClearSearch={() => {
+          setSearchQuery('');
+          setActiveSearch('');
+        }}
         onSearchSubmit={handleSearchSubmit}
         onToggleMobileSidebar={() => setIsMobileSidebarOpen(true)}
         onSignOut={handleSignOut}
