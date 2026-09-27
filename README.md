@@ -67,3 +67,31 @@ npm run lint    # Vérification TypeScript
 <div align="center">
 <sub>GMAIL-PRO — © MAHARITSE Hyacinthe Bertrand</sub>
 </div>
+
+## Dépannage Google OAuth : erreur 401 `invalid_client`
+
+« The OAuth client was not found » signifie que Google ne reconnaît pas le
+client envoyé. Ce n'est pas un problème de mot de passe ni d'utilisateur de test.
+
+1. Dans [Google Cloud Console → Identifiants](https://console.cloud.google.com/apis/credentials),
+   sélectionnez le projet voulu et vérifiez que votre client OAuth existe
+   (ou créez-en un de type **Application Web**).
+2. Ajoutez l'origine exacte du site aux **Origines JavaScript autorisées**
+   (protocole, domaine et port éventuel, sans chemin). En local :
+   `http://localhost:3000`. La prévisualisation doit aussi avoir son origine autorisée.
+3. Copiez l'**ID client**, jamais le secret, dans `.env.local` :
+   `VITE_GOOGLE_CLIENT_ID=VOTRE_ID.apps.googleusercontent.com`.
+   Redémarrez le serveur de développement ou reconstruisez puis redéployez en production.
+4. Pour corriger sans reconstruire, ouvrez **Configuration OAuth** sur l'écran
+   de connexion et enregistrez l'ID dans ce navigateur.
+
+Priorité : ID personnalisé du navigateur → `VITE_GOOGLE_CLIENT_ID` →
+`oAuthClientId` dans `firebase-applet-config.json`. Le bouton **Utiliser la
+configuration du site** supprime la surcharge locale obsolète. L'ID client est
+public ; ne placez aucun secret dans une variable `VITE_*`.
+
+Une fois le client reconnu, activez l'API Gmail et configurez le consentement
+OAuth ; si l'application est en mode test, ajoutez les comptes autorisés aux
+utilisateurs de test. Cela ne remplace pas la correction d'un client introuvable.
+Google peut afficher cette erreur uniquement dans sa fenêtre, sans la transmettre
+à l'application : les réglages restent donc accessibles même sans erreur locale.

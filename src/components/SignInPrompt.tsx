@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Mail, ShieldCheck, Inbox, Search, Sparkles, ExternalLink, AlertCircle, ChevronDown, ChevronUp, Copy, Check, Globe } from 'lucide-react';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { copyToClipboard, selectElementText } from '../utils/clipboard';
+import { getStoredClientId, saveCustomClientId } from '../services/googleAuth';
 import { ThemeToggle } from './ThemeToggle';
 import { useTheme } from '../context/ThemeContext';
 
@@ -13,6 +14,8 @@ interface SignInPromptProps {
 
 export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading, error }) => {
   const { isDark } = useTheme();
+  const [clientId, setClientId] = useState(getStoredClientId);
+  const [configStatus, setConfigStatus] = useState('');
   const [showHelpDetails, setShowHelpDetails] = useState(false);
   const [domainCopied, setDomainCopied] = useState(false);
   const [copyBlocked, setCopyBlocked] = useState(false);
@@ -41,13 +44,13 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
   return (
     <div
       id="signin-prompt-container"
-      className={`relative flex min-h-screen w-full flex-col items-center justify-center px-4 py-6 text-slate-300 sm:py-10 overflow-y-auto select-none ${isDark ? 'bg-[#05070A]' : 'bg-slate-100 text-slate-700'}`}
+      className={`relative flex h-dvh min-h-0 w-full flex-col items-center px-4 py-6 text-slate-300 sm:py-10 overflow-y-auto overflow-x-hidden overscroll-contain select-none ${isDark ? 'bg-[#05070A]' : 'bg-slate-100 text-slate-700'}`}
     >
       {/* Ambient background glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-cyan-500/10 blur-[120px] rounded-full pointer-events-none" />
       <div className="absolute bottom-10 right-10 w-72 h-72 bg-blue-600/10 blur-[100px] rounded-full pointer-events-none" />
 
-      <div className={`relative z-10 my-auto w-full max-w-md space-y-4 rounded-2xl border p-5 shadow-2xl backdrop-blur-xl sm:p-6 ${
+      <div className={`relative z-10 my-auto w-full max-w-md shrink-0 space-y-4 rounded-2xl border p-5 shadow-2xl backdrop-blur-xl sm:p-6 ${
         isDark
           ? 'border-slate-800 bg-[#080B10]/95 shadow-[0_0_50px_rgba(0,0,0,0.9)]'
           : 'border-slate-200 bg-white/95 shadow-[0_20px_60px_rgba(15,23,42,0.12)]'
@@ -81,7 +84,9 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
               <AlertCircle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
               <div className="flex-1">
                 <span className="font-semibold text-amber-200 uppercase tracking-wide">
-                  {error.includes('fermée') || error.includes('fermé')
+                  {error.includes('invalid_client')
+                    ? 'Client OAuth introuvable :'
+                    : error.includes('fermée') || error.includes('fermé')
                     ? 'Fenêtre de connexion fermée :'
                     : error.includes('bloquée') || error.includes('bloqué')
                     ? 'Popup bloquée :'
@@ -208,8 +213,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
                 </ol>
 
                 <p className="text-[10px] text-slate-500 border-t border-slate-800 pt-2">
-                  Astuce : en développement local (http://localhost:3000), la connexion fonctionne
-                  sans configuration — localhost est toujours autorisé par défaut.
+                  En local aussi, ajoutez l'origine exacte (par exemple http://localhost:3000) aux origines JavaScript autorisées du client OAuth.
                 </p>
               </div>
             )}
@@ -243,6 +247,37 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
             </span>
           </button>
         </div>
+
+        <details open className="rounded-lg border border-slate-600 p-3 text-xs">
+          <summary className="cursor-pointer font-semibold">Configuration OAuth — erreur 401 invalid_client</summary>
+          <div className="mt-3 space-y-3">
+            <p>Si Google affiche « The OAuth client was not found », vérifiez que le client existe dans votre projet Google Cloud et qu'il est de type Application Web. Un ID au bon format ne garantit pas son existence.</p>
+            <a href={gcpCredentialsUrl} target="_blank" rel="noopener noreferrer" className="text-cyan-500 underline">Ouvrir les identifiants Google Cloud</a>
+            <p>Autorisez cette origine JavaScript sur ce client : <code className="break-all select-all">{currentOrigin}</code></p>
+            <p>ID actuellement utilisé :</p>
+            <code className="block break-all whitespace-normal select-all rounded bg-slate-500/10 p-2">{getStoredClientId() || 'Aucun ID configuré'}</code>
+            <label htmlFor="oauth-client-id" className="block">ID client OAuth (public, jamais le secret client)</label>
+            <input id="oauth-client-id" value={clientId} onChange={(event) => { setClientId(event.target.value); setConfigStatus(''); }} disabled={isLoading} spellCheck={false} autoComplete="off" placeholder="123456789-…apps.googleusercontent.com" className="w-full rounded border border-slate-500 bg-transparent p-2 select-text" />
+            <p>Ce réglage est prioritaire et ne concerne que ce navigateur. Pour tous les visiteurs, définissez VITE_GOOGLE_CLIENT_ID puis reconstruisez et redéployez le site.</p>
+            <div className="flex gap-3">
+              <button type="button" disabled={isLoading} className="underline" onClick={() => {
+                const value = clientId.trim();
+                if (!/^[0-9]+-[a-zA-Z0-9_-]+\.apps\.googleusercontent\.com$/.test(value)) {
+                  setConfigStatus('Format invalide : copiez l’ID du client Application Web, pas une clé API ni un secret.');
+                  return;
+                }
+                saveCustomClientId(value);
+                setConfigStatus(getStoredClientId() === value ? 'ID enregistré. Réessayez la connexion Google.' : 'Enregistrement impossible : vérifiez les autorisations de stockage du navigateur.');
+              }}>Enregistrer l’ID</button>
+              <button type="button" disabled={isLoading} className="underline" onClick={() => {
+                saveCustomClientId('');
+                setClientId(getStoredClientId());
+                setConfigStatus('Configuration relue. L’ID affiché sera utilisé à la prochaine connexion.');
+              }}>Utiliser la configuration du site</button>
+            </div>
+            <p role="status">{configStatus}</p>
+          </div>
+        </details>
 
         {/* Toggleable Details & Troubleshooting Section */}
         <div className="border-t border-slate-800/80 pt-3">
@@ -291,7 +326,7 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
       </div>
 
       {/* Crédit créateur */}
-      <div className={`relative z-10 mt-5 flex flex-col items-center gap-1 text-center ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
+      <div className={`relative z-10 mt-5 flex shrink-0 flex-col items-center gap-1 text-center ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
         <p className="text-[11px] font-mono text-slate-500">
           Conçu et développé par{' '}
           <span className={`font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>MAHARITSE Hyacinthe Bertrand</span>
