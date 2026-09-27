@@ -25,9 +25,35 @@ export interface AuthenticatedUser {
 
 const TOKEN_STORAGE_KEY = 'gmail_net_oauth_access_token';
 const USER_STORAGE_KEY = 'gmail_net_oauth_user_profile';
+const CUSTOM_CLIENT_ID_KEY = 'gmail_custom_oauth_client_id';
 
 let cachedToken: string | null = null;
 let cachedUser: AuthenticatedUser | null = null;
+
+export function getStoredClientId(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const custom = window.localStorage.getItem(CUSTOM_CLIENT_ID_KEY);
+    if (custom && custom.trim()) return custom.trim();
+  } catch {}
+  return (firebaseConfig as any).oAuthClientId || (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '';
+}
+
+export function saveCustomClientId(clientId: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (clientId && clientId.trim()) {
+      window.localStorage.setItem(CUSTOM_CLIENT_ID_KEY, clientId.trim());
+    } else {
+      window.localStorage.removeItem(CUSTOM_CLIENT_ID_KEY);
+    }
+  } catch {}
+}
+
+export function hasConfiguredClientId(): boolean {
+  const id = getStoredClientId();
+  return Boolean(id && id.length > 5);
+}
 
 export function setCachedUserAndToken(user: AuthenticatedUser | null, token: string | null) {
   cachedUser = user;
@@ -144,9 +170,7 @@ async function waitForGsi(timeoutMs = 4000): Promise<boolean> {
  */
 export async function signInWithGoogleGsi(): Promise<{ user: AuthenticatedUser; accessToken: string }> {
   const isGsiAvailable = await waitForGsi(2500);
-  const clientId =
-    (firebaseConfig as any).oAuthClientId ||
-    (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID : undefined);
+  const clientId = getStoredClientId();
 
   if (!isGsiAvailable || !clientId) {
     throw new Error('GSI_UNAVAILABLE');
