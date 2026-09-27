@@ -73,6 +73,9 @@ export const getAuthErrorMessage = (error: any): string => {
   const code = error?.code || '';
   const message = typeof error?.message === 'string' ? error.message : '';
 
+  if (/invalid_client|OAuth client was not found|deleted_client/i.test(`${code} ${message}`)) {
+    return 'Erreur 401 invalid_client : Google ne reconnaît pas le client OAuth configuré (incorrect ou supprimé). Dans Google Cloud Console → Identifiants, vérifiez ou créez un client OAuth de type Application Web, puis renseignez son ID dans Configuration OAuth ci-dessous. Ajouter un utilisateur de test ne corrige pas cette erreur.';
+  }
   if (code === 'auth/popup-closed-by-user' || message.includes('popup-closed-by-user')) {
     return 'La fenêtre de connexion Google a été fermée avant la fin de l\'autorisation. Veuillez cliquer sur S\'authentifier et garder la fenêtre popup ouverte jusqu\'à la sélection de votre compte Google.';
   }

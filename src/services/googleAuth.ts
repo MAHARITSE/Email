@@ -36,7 +36,7 @@ export function getStoredClientId(): string {
     const custom = window.localStorage.getItem(CUSTOM_CLIENT_ID_KEY);
     if (custom && custom.trim()) return custom.trim();
   } catch {}
-  return (firebaseConfig as any).oAuthClientId || (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '';
+  return ((import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || (firebaseConfig as any).oAuthClientId || '').trim();
 }
 
 export function saveCustomClientId(clientId: string) {
@@ -188,7 +188,9 @@ export async function signInWithGoogleGsi(): Promise<{ user: AuthenticatedUser; 
           if (isResolved) return;
           if (response.error) {
             isResolved = true;
-            if (response.error === 'popup_closed_by_user') {
+            if (response.error === 'invalid_client' || response.error === 'deleted_client') {
+              reject(new Error(response.error));
+            } else if (response.error === 'popup_closed_by_user') {
               reject(new Error('POPUP_CLOSED'));
             } else if (response.error === 'access_denied' || response.error_description?.includes('access_denied')) {
               reject(new Error('ACCESS_DENIED'));
@@ -250,6 +252,10 @@ export async function universalSignIn(): Promise<{ user: AuthenticatedUser; acce
   try {
     return await signInWithGoogleGsi();
   } catch (gsiError: any) {
+    if (/invalid_client|OAuth client was not found|deleted_client/i.test(gsiError?.message || '')) {
+      // A configuration failure must not be hidden by another Firebase popup.
+      throw new Error(getAuthErrorMessage(gsiError));
+    }
     if (gsiError?.message === 'POPUP_CLOSED') {
       throw new Error(
         'La fenêtre de connexion Google a été fermée avant la validation. Veuillez cliquer sur S\'authentifier et sélectionner votre compte.'
