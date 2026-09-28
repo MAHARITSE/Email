@@ -90,7 +90,7 @@ npx wrangler deploy --var VITE_GOOGLE_CLIENT_ID:"xxxx.apps.googleusercontent.com
 #    ou dans le dashboard : Settings > Variables and Secrets (Build-time variable)
 ```
 
-Après déploiement, l'app est disponible sur `https://gmail-pro.<sous-domaine>.workers.dev`
+Après déploiement, l'app est disponible sur `https://email.<sous-domaine>.workers.dev`
 (ajouter aussi cette origine dans Google Cloud Console > Credentials > Origines JavaScript autorisées).
 
 **Fichiers clés du déploiement :**
@@ -105,6 +105,11 @@ Après déploiement, l'app est disponible sur `https://gmail-pro.<sous-domaine>.
 - `.node-version` / `.nvmrc` = `22`, `engines.node >= 22` → évite l'erreur
   *« Wrangler requires at least Node.js v22.0.0 »* pendant le déploiement
 
+**❓ Erreur « The name in your Wrangler configuration file (…) must match the name of your
+Worker »** → le nom du Worker sur le dashboard Cloudflare (Workers & Pages) doit être
+**exactement** le même que `name` dans `wrangler.jsonc` (ici `email`) ; sinon *Workers Builds*
+échoue en moins d'une seconde, sans lancer le build.
+
 **❓ Erreur « Wrangler requires at least Node.js v22.0.0. You are using v20 »**
 → le build tourne sur Node 20. Wrangler ≥ 4.142 exige Node 22. Ce dépôt déclare
 `22` dans `.node-version`, `.nvmrc` et `engines.node` : forcez `NODE_VERSION=22`
@@ -114,6 +119,8 @@ dans l'environnement de build si l'erreur persiste.
 
 Le projet reste compatible Pages (static + Functions) si vous préférez ce mode :
 
+- **Projet Pages :** nom libre mais **différent** du Worker (`gmail-pro` dans les exemples),
+  les Workers et les projets Pages partageant le même espace de noms
 - **Build command :** `npm run build:cloudflare` — **Output directory :** `dist`
 - **Node version :** `22` (variable `NODE_VERSION=22`)
 - **Env vars :** `VITE_GOOGLE_CLIENT_ID` (Var, public) et `GEMINI_API_KEY` (Secret)

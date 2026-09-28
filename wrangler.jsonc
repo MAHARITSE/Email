@@ -10,7 +10,10 @@
   // this project as Cloudflare Pages and abort `wrangler deploy`. The Pages
   // alternative is documented in README.md (`functions/` + `wrangler pages deploy`).
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "gmail-pro",
+  // ⚠️ MUST match the Worker name in the Cloudflare dashboard
+  // (Workers & Pages > <name>), otherwise Workers Builds aborts immediately with
+  // "The name in your Wrangler configuration file must match the name of your Worker".
+  "name": "email",
   "main": "worker/index.ts",
   // Runtime compatibility date (bumped from 2024-12-01 so /api/* routing and the
   // static-assets behaviour match the current Workers runtime).

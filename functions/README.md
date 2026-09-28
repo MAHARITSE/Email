@@ -6,7 +6,7 @@ Gemini REST). Elle est consommée de deux façons :
 1. **Déploiement par défaut — Cloudflare Worker** (`npx wrangler deploy`, cf. `wrangler.jsonc`) :
    `worker/index.ts` route `/api/*` vers ces handlers en reconstruisant l'objet
    `context` de Pages Functions. Aucune duplication de code.
-2. **Cloudflare Pages** (`npx wrangler pages deploy dist --project-name=gmail-pro`) :
+2. **Cloudflare Pages** (`npx wrangler pages deploy dist --project-name=gmail-pro`, nom de projet libre, distinct du Worker `email`) :
    le dossier `functions/` est détecté automatiquement par Pages.
 
 ## Structure

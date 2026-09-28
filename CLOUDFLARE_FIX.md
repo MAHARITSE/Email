@@ -19,8 +19,19 @@
 >    *« It seems that you have run `wrangler deploy` on a Pages project »* puis échoue
 >    avec *« Missing entry-point to Worker script or to assets directory »*.
 >
+> **3ᵉ cause, révélée par le check « Workers Builds: email » du dépôt :**
+> l'intégration Git de Cloudflare (*Workers Builds*) déploie le Worker **`email`**
+> (nom du dashboard), alors que `wrangler.jsonc` déclarait `name = "gmail-pro"`.
+> Or *Workers Builds* exige que `name` soit **identique** au nom du Worker du
+> dashboard — sinon le build échoue **immédiatement** (< 1 s, sans exécuter le build) :
+> `✘ [ERROR] The name in your Wrangler configuration file (gmail-pro) must match the
+> name of your Worker.`
+> → `wrangler.jsonc` déclare désormais `name = "email"`.
+> Réf. https://developers.cloudflare.com/workers/ci-cd/builds/troubleshoot/#workers-name-requirement
+>
 > **Corrections appliquées :**
 > - `.node-version` = `22`, `.nvmrc` = `22`, `engines.node >= 22` dans `package.json`.
+> - `name = "email"` dans `wrangler.jsonc` (aligné sur le Worker du dashboard).
 > - `wrangler.jsonc` réécrit en **Workers + Static Assets** :
 >   `main: worker/index.ts`, `assets.directory: ./dist`,
 >   `assets.not_found_handling: single-page-application`,
@@ -353,5 +364,6 @@ Pages en option) :
 - OAuth Google fonctionne avec `Cross-Origin-Opener-Policy: same-origin-allow-popups`
 - Déploiement en 1 commande : `npx wrangler deploy` (build inclus) ou Pages via Dashboard
 - Build Node 22 → plus d'erreur *« Wrangler requires at least Node.js v22.0.0 »*
+- Nom du Worker aligné (`email`) → plus d'erreur *« must match the name of your Worker »*
 
 Auteur du fix : Agent Arena — 2026-09-28 (2ᵉ passe : 2026-09-28)
