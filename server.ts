@@ -44,7 +44,14 @@ async function generateGeminiWithFallbackAndRetry(
   contents: string,
   config?: any
 ) {
-  const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  // Use real, available models. 3.8-flash doesn't exist - map to 2.0/1.5 flash
+  const candidateModels = [
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-flash-latest',
+    'gemini-1.5-flash-8b',
+  ];
   let lastError: any = null;
 
   for (const model of candidateModels) {

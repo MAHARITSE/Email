@@ -1,0 +1,38 @@
+# Wrangler config for Cloudflare Pages + Functions
+# This project uses Cloudflare Pages Functions (functions/ directory)
+# Build output: dist (Vite SPA)
+
+name = "gmail-pro"
+type = "javascript"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Pages configuration
+[site]
+bucket = "./dist"
+
+# Build configuration for Cloudflare Pages dashboard:
+# - Build command: npm run build:cloudflare  (or npm run build)
+# - Build output directory: dist
+# - Node version: 20 (set via env var NODE_VERSION=20 in Cloudflare dashboard)
+# - Environment variables to set in dashboard:
+#   GEMINI_API_KEY (secret, for AI features)
+#   VITE_GOOGLE_CLIENT_ID (public OAuth client ID)
+
+# For local dev with Pages Functions:
+# npx wrangler pages dev dist --compatibility-date=2024-12-01 --compatibility-flag=nodejs_compat
+
+[build]
+command = "npm run build:cloudflare"
+
+# Assets binding not needed - Pages serves dist automatically
+# Functions in functions/ are automatically deployed
+
+# Uncomment to configure custom domain via wrangler (optional)
+# [[routes]]
+# pattern = "email.pro"
+# zone_name = "email.pro"
+
+# Vars (non-secret) - can be overridden in dashboard
+[vars]
+NODE_ENV = "production"

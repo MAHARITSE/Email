@@ -47,9 +47,45 @@ npm run dev
 L'application démarre sur `http://localhost:3000`.
 
 ```bash
-npm run build   # Build production (client + serveur)
-npm run start   # Serveur production (node dist/server.cjs)
-npm run lint    # Vérification TypeScript
+npm run build            # Build production (client + serveur Node)
+npm run build:cloudflare # Build uniquement client pour Cloudflare Pages
+npm run build:client     # Alias de build:cloudflare
+npm run start            # Serveur production (node dist/server.cjs)
+npm run lint             # Vérification TypeScript
+npm run pages:dev        # Dev local simulant Cloudflare Pages + Functions (wrangler)
+```
+
+### ☁️ Déploiement Cloudflare Pages (Fix inclus)
+
+**Cette application est maintenant 100% compatible Cloudflare Pages !**
+
+Le problème initial était que `server.ts` utilisait Express (serveur Node persistant) incompatible avec Pages (static + Functions). Le fix ajoute des **Cloudflare Pages Functions** dans `functions/` qui remplacent l'API Express.
+
+**Configuration Dashboard Cloudflare :**
+- **Build command :** `npm run build:cloudflare`
+- **Output directory :** `dist`
+- **Node version :** `20` (variable `NODE_VERSION=20`)
+- **Env vars :**
+  - `VITE_GOOGLE_CLIENT_ID` (Var, public) = ID client OAuth Google
+  - `GEMINI_API_KEY` (Secret, encrypted) = clé Gemini pour IA
+- **Custom domain :** Pages > Custom domains > Add (ex: `email.pro`, pas `gmail_pro.com` avec underscore invalide)
+- **OAuth origins :** Google Cloud Console > Credentials > Ajouter `https://<your-app>.pages.dev` aux Origines JS autorisées
+
+**Fichiers clés du fix :**
+- `functions/api/_shared.ts` + `functions/api/ai/*.ts` → API IA serverless compatible Workers
+- `public/_redirects` → SPA fallback `/* /index.html 200`
+- `public/_headers` → Security headers + `Cross-Origin-Opener-Policy` pour Google OAuth popup
+- `public/_routes.json` → Route `/api/*` vers Functions
+- `wrangler.toml` / `wrangler.jsonc` → Config Pages
+- `.node-version` = 20
+
+Voir `CLOUDFLARE_FIX.md` pour le rapport détaillé.
+
+**Déploiement via Wrangler CLI :**
+```bash
+npm run build:cloudflare
+npx wrangler pages deploy dist --project-name=gmail-pro
+npx wrangler pages secret put GEMINI_API_KEY --project-name=gmail-pro
 ```
 
 ---
