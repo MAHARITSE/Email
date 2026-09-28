@@ -29,7 +29,8 @@ React 19 · TypeScript · Vite 6 · Tailwind CSS 4 · pdf.js · mammoth · Sheet
 
 ## ⚙️ Exécution locale
 
-**Prérequis :** Node.js 18+
+**Prérequis :** Node.js 22+ (requis par Wrangler 4.142 pour le déploiement Cloudflare ;
+voir `.node-version` / `.nvmrc`)
 
 ```bash
 # 1. Installer les dépendances
@@ -47,46 +48,91 @@ npm run dev
 L'application démarre sur `http://localhost:3000`.
 
 ```bash
-npm run build            # Build production (client + serveur Node)
-npm run build:cloudflare # Build uniquement client pour Cloudflare Pages
-npm run build:client     # Alias de build:cloudflare
-npm run start            # Serveur production (node dist/server.cjs)
+npm run build            # Build production (client dist/ + serveur Node dist/server.cjs)
+npm run build:cloudflare # Build client uniquement (dist/ pour Cloudflare)
+npm run start            # Serveur production Node (node dist/server.cjs)
 npm run lint             # Vérification TypeScript
-npm run pages:dev        # Dev local simulant Cloudflare Pages + Functions (wrangler)
+npm run deploy           # Déploiement Cloudflare Workers (wrangler deploy)
+npm run deploy:dry-run   # Vérifie le bundle + les assets sans publier
+npm run worker:dev       # Dev local du Worker + SPA (http://localhost:8787)
 ```
 
-### ☁️ Déploiement Cloudflare Pages (Fix inclus)
+### ☁️ Déploiement Cloudflare (Workers + Static Assets)
 
-**Cette application est maintenant 100% compatible Cloudflare Pages !**
+**C'est la cible de déploiement par défaut** : la commande de déploiement
+`npx wrangler deploy` (utilisée par la CI/plateforme) publie **un Worker**, pas un
+projet *Cloudflare Pages*.
 
-Le problème initial était que `server.ts` utilisait Express (serveur Node persistant) incompatible avec Pages (static + Functions). Le fix ajoute des **Cloudflare Pages Functions** dans `functions/` qui remplacent l'API Express.
+`wrangler.jsonc` décrit les deux moitiés du déploiement :
 
-**Configuration Dashboard Cloudflare :**
-- **Build command :** `npm run build:cloudflare`
-- **Output directory :** `dist`
-- **Node version :** `20` (variable `NODE_VERSION=20`)
-- **Env vars :**
-  - `VITE_GOOGLE_CLIENT_ID` (Var, public) = ID client OAuth Google
-  - `GEMINI_API_KEY` (Secret, encrypted) = clé Gemini pour IA
-- **Custom domain :** Pages > Custom domains > Add (ex: `email.pro`, pas `gmail_pro.com` avec underscore invalide)
-- **OAuth origins :** Google Cloud Console > Credentials > Ajouter `https://<your-app>.pages.dev` aux Origines JS autorisées
+| Réglage | Rôle |
+|---|---|
+| `main: worker/index.ts` | Point d'entrée du Worker : sert `/api/*` |
+| `assets.directory: ./dist` | La SPA construite par Vite, servie par la couche *static assets* |
+| `assets.not_found_handling: single-page-application` | Route cliente inconnue → `index.html` (deep links `/inbox/...`) |
+| `assets.run_worker_first: ["/api/*"]` | Seul `/api/*` réveille le Worker (pas de coût par requête statique) |
+| `compatibility_date: 2026-09-28`, `nodejs_compat` | Runtime Workers à jour |
 
-**Fichiers clés du fix :**
-- `functions/api/_shared.ts` + `functions/api/ai/*.ts` → API IA serverless compatible Workers
-- `public/_redirects` → SPA fallback `/* /index.html 200`
-- `public/_headers` → Security headers + `Cross-Origin-Opener-Policy` pour Google OAuth popup
-- `public/_routes.json` → Route `/api/*` vers Functions
-- `wrangler.toml` / `wrangler.jsonc` → Config Pages
-- `.node-version` = 20
+L'API est **implémentée une seule fois** dans `functions/` (format Pages Functions).
+`worker/index.ts` reconstruit le petit objet `context` de Pages et délègue à ces
+mêmes handlers — donc zéro duplication, et le dossier `functions/` reste
+utilisable tel quel pour un déploiement Pages.
 
-Voir `CLOUDFLARE_FIX.md` pour le rapport détaillé.
+```bash
+# 1. Déployer (le build est lancé automatiquement via build.command)
+npm run deploy
 
-**Déploiement via Wrangler CLI :**
+# 2. Clé Gemini (secret, jamais dans le repo)
+npx wrangler secret put GEMINI_API_KEY
+
+# 3. (Optionnel) ID client OAuth Google, injecté au build par Vite
+npx wrangler deploy --var VITE_GOOGLE_CLIENT_ID:"xxxx.apps.googleusercontent.com"
+#    ou dans le dashboard : Settings > Variables and Secrets (Build-time variable)
+```
+
+Après déploiement, l'app est disponible sur `https://gmail-pro.<sous-domaine>.workers.dev`
+(ajouter aussi cette origine dans Google Cloud Console > Credentials > Origines JavaScript autorisées).
+
+**Fichiers clés du déploiement :**
+
+- `wrangler.jsonc` → config unique (Worker + assets). *Ne pas* y remettre
+  `pages_build_output_dir` : Wrangler considérerait le projet comme Pages et
+  refuserait `wrangler deploy`.
+- `worker/index.ts` → routeur Worker (`/api/health`, `/api/ai/*`) + middleware CORS
+- `functions/_middleware.ts`, `functions/api/**` → handlers partagés (CORS, Gemini REST, heuristiques)
+- `public/_headers` → headers de sécurité + `Cross-Origin-Opener-Policy` (popup OAuth Google)
+- `public/.assetsignore` → exclut `dist/server.cjs`, `dist/server.cjs.map` et `_routes.json` de l'upload
+- `.node-version` / `.nvmrc` = `22`, `engines.node >= 22` → évite l'erreur
+  *« Wrangler requires at least Node.js v22.0.0 »* pendant le déploiement
+
+**❓ Erreur « Wrangler requires at least Node.js v22.0.0. You are using v20 »**
+→ le build tourne sur Node 20. Wrangler ≥ 4.142 exige Node 22. Ce dépôt déclare
+`22` dans `.node-version`, `.nvmrc` et `engines.node` : forcez `NODE_VERSION=22`
+dans l'environnement de build si l'erreur persiste.
+
+### ☁️ Alternative : Cloudflare Pages (dossier `functions/`)
+
+Le projet reste compatible Pages (static + Functions) si vous préférez ce mode :
+
+- **Build command :** `npm run build:cloudflare` — **Output directory :** `dist`
+- **Node version :** `22` (variable `NODE_VERSION=22`)
+- **Env vars :** `VITE_GOOGLE_CLIENT_ID` (Var, public) et `GEMINI_API_KEY` (Secret)
+- Ajoutez `public/_redirects` avec `/*    /index.html   200` pour le fallback SPA
+  (inutile pour le déploiement Workers, qui utilise `not_found_handling`) ;
+  `public/_routes.json` route alors `/api/*` vers les Functions.
+
 ```bash
 npm run build:cloudflare
 npx wrangler pages deploy dist --project-name=gmail-pro
 npx wrangler pages secret put GEMINI_API_KEY --project-name=gmail-pro
 ```
+
+> ⚠️ Ne lancez pas `npx wrangler deploy` sur un projet Pages : Wrangler avertit
+> *« It seems that you have run `wrangler deploy` on a Pages project »* et échoue
+> faute de point d'entrée. Utilisez `wrangler pages deploy` (Pages) **ou**
+> `wrangler deploy` avec `wrangler.jsonc` (Worker), jamais les deux mélangés.
+
+Voir `CLOUDFLARE_FIX.md` pour le rapport détaillé.
 
 ---
 
