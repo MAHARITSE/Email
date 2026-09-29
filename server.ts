@@ -574,6 +574,11 @@ async function startServer() {
     return res.sendFile(hasDist ? path.join(distPath, 'index.html') : path.join(process.cwd(), 'index.html'));
   });
 
+  // Google Search Console automatic verification file handler
+  app.get('/google:code.html', (req, res) => {
+    res.type('html').send(`google-site-verification: google${req.params.code}.html`);
+  });
+
   if (!isProduction) {
     try {
       const vite = await createViteServer({
