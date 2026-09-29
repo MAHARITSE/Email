@@ -76,6 +76,9 @@ interface EmailListProps {
   onStatusFilterChange?: (status: 'all' | 'unread' | 'starred') => void;
   onEmptyTrash?: () => void;
   onEmptySpam?: () => void;
+  /** Compteurs réels des dossiers (permet de vider même si la liste est vide). */
+  trashTotal?: number;
+  spamTotal?: number;
 }
 
 export interface ThreadGroup {
@@ -120,6 +123,8 @@ export const EmailList: React.FC<EmailListProps> = ({
   onStatusFilterChange,
   onEmptyTrash,
   onEmptySpam,
+  trashTotal = 0,
+  spamTotal = 0,
 }) => {
   const { isDark } = useTheme();
   const [contactsVersion, setContactsVersion] = useState(0);
@@ -887,7 +892,7 @@ export const EmailList: React.FC<EmailListProps> = ({
             </span>
           </div>
 
-          {emails.length > 0 && onEmptyTrash && (
+          {(emails.length > 0 || trashTotal > 0) && onEmptyTrash && (
             <button
               type="button"
               id="empty-trash-btn"
@@ -918,7 +923,7 @@ export const EmailList: React.FC<EmailListProps> = ({
             </span>
           </div>
 
-          {emails.length > 0 && onEmptySpam && (
+          {(emails.length > 0 || spamTotal > 0) && onEmptySpam && (
             <button
               type="button"
               id="empty-spam-btn"

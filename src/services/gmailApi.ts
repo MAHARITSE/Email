@@ -310,12 +310,14 @@ export async function fetchLabels(token: string): Promise<GmailLabel[]> {
     const data = await res.json();
     const rawLabels: GmailLabel[] = data.labels || [];
 
-    // Fetch full details (including threadsUnread, messagesUnread, threadsTotal, messagesTotal) for all folders
+    // Fetch full details (including threadsUnread, messagesUnread, threadsTotal, messagesTotal)
+    // ONLY for the main system folders. Les libellés personnalisés n'affichent pas de
+    // compteur : récupérer leurs détails multipliait les requêtes à chaque sync.
     const mainFolderIds = ['INBOX', 'STARRED', 'SENT', 'DRAFT', 'SPAM', 'TRASH', 'UNREAD', 'IMPORTANT'];
 
     const detailed = await Promise.all(
       rawLabels.map(async (l) => {
-        if (mainFolderIds.includes(l.id) || l.type === 'user') {
+        if (mainFolderIds.includes(l.id)) {
           try {
             const detailRes = await fetch(`${GMAIL_BASE}/labels/${l.id}`, {
               headers: { Authorization: `Bearer ${token}` },
@@ -347,12 +349,151 @@ export interface ListMessagesParams {
   labelIds?: string[];
   pageToken?: string;
   maxResults?: number;
+  /**
+   * Réutilise les conversations déjà téléchargées (refresh silencieux).
+   * Évite de re-télécharger 50 conversations à chaque synchronisation.
+   */
+  useCache?: boolean;
+  /**
+   * Conversations réellement modifiées depuis le dernier sync (issues de l'API History).
+   * Celles-ci sont obligatoirement re-téléchargées, les autres viennent du cache.
+   */
+  changedThreadIds?: Set<string> | null;
 }
 
 export interface ListMessagesResponse {
   emails: ParsedEmail[];
   nextPageToken?: string;
   resultSizeEstimate: number;
+  /** Nombre de conversations réellement re-téléchargées (0 = tout venait du cache). */
+  fetchedFromApi?: number;
+}
+
+/* -------------------------------------------------------------------------- */
+/* CACHE LOCAL DES CONVERSATIONS                                               */
+/* -------------------------------------------------------------------------- */
+
+const THREAD_CACHE_TTL_MS = 10 * 60 * 1000;
+const THREAD_CACHE_MAX_ENTRIES = 800;
+const THREAD_FETCH_CONCURRENCY = 6;
+
+interface ThreadCacheEntry {
+  messages: ParsedEmail[];
+  fetchedAt: number;
+}
+
+const threadCache = new Map<string, ThreadCacheEntry>();
+/** Index messageId -> threadId (utilisé par la synchro History). */
+const messageThreadIndex = new Map<string, string>();
+
+function rememberThread(threadId: string, messages: ParsedEmail[]) {
+  if (threadCache.size > THREAD_CACHE_MAX_ENTRIES) {
+    threadCache.clear();
+  }
+  threadCache.set(threadId, { messages, fetchedAt: Date.now() });
+  messages.forEach((m) => messageThreadIndex.set(m.id, threadId));
+}
+
+/** Invalide une ou plusieurs conversations (ou tout le cache si aucun id fourni). */
+export function invalidateThreadCache(threadIds?: Iterable<string>) {
+  if (!threadIds) {
+    threadCache.clear();
+    return;
+  }
+  for (const id of threadIds) {
+    threadCache.delete(id);
+  }
+}
+
+export function clearThreadCache() {
+  threadCache.clear();
+  messageThreadIndex.clear();
+}
+
+export function getThreadIdForMessage(messageId: string): string | undefined {
+  return messageThreadIndex.get(messageId);
+}
+
+/** Exécute un traitement asynchrone avec une concurrence limitée (évite les 429). */
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  if (items.length === 0) return;
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+async function fetchThreadMessages(token: string, threadId: string): Promise<ParsedEmail[]> {
+  const threadRes = await fetch(`${GMAIL_BASE}/threads/${threadId}?format=full`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!threadRes.ok) return [];
+  const threadData = await threadRes.json();
+  const rawMsgs: GmailRawMessage[] = threadData.messages || [];
+  return rawMsgs.map((m) => parseRawMessage(m));
+}
+
+/**
+ * Repli fiable pour la CORBEILLE et le SPAM : interroge directement les messages
+ * (et non les conversations). Certains comptes renvoient des conversations dont
+ * aucun message ne porte le libellé TRASH, ce qui affichait "corbeille vide"
+ * alors que le compteur indiquait des éléments.
+ */
+async function listMessagesByQuery(
+  token: string,
+  query: string,
+  maxResults: number,
+  pageToken?: string
+): Promise<ListMessagesResponse> {
+  const url = new URL(`${GMAIL_BASE}/messages`);
+  url.searchParams.set('maxResults', String(maxResults));
+  url.searchParams.set('includeSpamTrash', 'true');
+  if (query) url.searchParams.set('q', query);
+  if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => null);
+    const msg = errJson?.error?.message || `Failed to list messages (${res.status})`;
+    notifyIfAuthError(res.status, msg);
+    throw new Error(msg);
+  }
+
+  const data = await res.json();
+  const items: { id: string }[] = data.messages || [];
+  const emails: ParsedEmail[] = [];
+
+  await mapWithConcurrency(items, THREAD_FETCH_CONCURRENCY, async (item) => {
+    try {
+      const msgRes = await fetch(`${GMAIL_BASE}/messages/${item.id}?format=full`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!msgRes.ok) return;
+      const raw: GmailRawMessage = await msgRes.json();
+      const parsed = parseRawMessage(raw);
+      emails.push(parsed);
+      if (parsed.threadId) messageThreadIndex.set(parsed.id, parsed.threadId);
+    } catch {
+      // ignore un message illisible
+    }
+  });
+
+  return {
+    emails,
+    nextPageToken: data.nextPageToken,
+    resultSizeEstimate: data.resultSizeEstimate || emails.length,
+  };
 }
 
 export async function listMessages(
@@ -418,31 +559,84 @@ export async function listMessages(
     const data = await res.json();
     const rawList: { id: string; snippet?: string; historyId?: string }[] = data.threads || [];
 
+    /**
+     * Repli Corbeille / Spam : l'API conversations ne ramène parfois AUCUN résultat
+     * (ou des conversations dont aucun message ne porte le libellé), alors que le
+     * compteur du dossier indique des éléments. On rejoue alors la recherche au
+     * niveau des messages pour ne plus afficher "dossier vide" à tort.
+     */
+    const runSpamTrashFallback = async (): Promise<ListMessagesResponse | null> => {
+      if (!isSpamOrTrash) return null;
+      try {
+        const fallback = await listMessagesByQuery(
+          token,
+          isTrash ? 'in:trash' : 'in:spam',
+          requestedMax,
+          params.pageToken
+        );
+        const filtered = isTrash
+          ? fallback.emails.filter((m) => m.labelIds && m.labelIds.includes('TRASH'))
+          : fallback.emails.filter((m) => m.labelIds && m.labelIds.includes('SPAM'));
+
+        if (filtered.length > 0) {
+          return {
+            emails: filtered,
+            nextPageToken: fallback.nextPageToken,
+            resultSizeEstimate: fallback.resultSizeEstimate || filtered.length,
+            fetchedFromApi: fallback.emails.length,
+          };
+        }
+      } catch (fallbackErr) {
+        console.warn('Trash/Spam fallback listing failed:', fallbackErr);
+      }
+      return null;
+    };
+
     if (rawList.length === 0) {
-      return {
-        emails: [],
-        nextPageToken: data.nextPageToken,
-        resultSizeEstimate: data.resultSizeEstimate || 0,
-      };
+      const fallback = await runSpamTrashFallback();
+      return (
+        fallback || {
+          emails: [],
+          nextPageToken: data.nextPageToken,
+          resultSizeEstimate: data.resultSizeEstimate || 0,
+          fetchedFromApi: 0,
+        }
+      );
     }
 
-    // Fetch full thread details (including all messages/replies in each thread)
-    const detailPromises = rawList.map(async (item) => {
-      try {
-        const threadRes = await fetch(`${GMAIL_BASE}/threads/${item.id}?format=full`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!threadRes.ok) return [];
-        const threadData = await threadRes.json();
-        const rawMsgs: GmailRawMessage[] = threadData.messages || [];
-        return rawMsgs.map((m) => parseRawMessage(m));
-      } catch {
-        return [];
+    // Fetch full thread details (including all messages/replies in each thread).
+    // Les conversations non modifiées depuis le dernier sync sont servies par le cache :
+    // c'est ce qui évite de re-télécharger 50 conversations à chaque rafraîchissement.
+    const now = Date.now();
+    const results: ParsedEmail[][] = new Array(rawList.length);
+    const toFetch: Array<{ index: number; id: string }> = [];
+    let fetchedFromApi = 0;
+
+    rawList.forEach((item, index) => {
+      const cached = params.useCache ? threadCache.get(item.id) : undefined;
+      const isChanged = params.changedThreadIds ? params.changedThreadIds.has(item.id) : false;
+      const isFresh = cached && now - cached.fetchedAt < THREAD_CACHE_TTL_MS;
+
+      if (cached && isFresh && !isChanged) {
+        results[index] = cached.messages;
+      } else {
+        results[index] = [];
+        toFetch.push({ index, id: item.id });
       }
     });
 
-    const resolvedLists = await Promise.all(detailPromises);
-    let emails = resolvedLists.flat();
+    await mapWithConcurrency(toFetch, THREAD_FETCH_CONCURRENCY, async ({ index, id }) => {
+      try {
+        const messages = await fetchThreadMessages(token, id);
+        results[index] = messages;
+        rememberThread(id, messages);
+        fetchedFromApi++;
+      } catch {
+        results[index] = [];
+      }
+    });
+
+    let emails = results.flat();
 
     // Strict label isolation: Corbeille must ONLY contain messages in TRASH, and active folders must NEVER contain trashed messages
     if (isTrash) {
@@ -453,10 +647,17 @@ export async function listMessages(
       emails = emails.filter((m) => !m.labelIds?.includes('TRASH') && !m.labelIds?.includes('SPAM'));
     }
 
+    // SÉCURITÉ CORBEILLE / SPAM : rien n'a été retenu après filtrage -> repli messages.
+    if (isSpamOrTrash && emails.length === 0) {
+      const fallback = await runSpamTrashFallback();
+      if (fallback) return fallback;
+    }
+
     return {
       emails,
       nextPageToken: data.nextPageToken,
       resultSizeEstimate: data.resultSizeEstimate || rawList.length,
+      fetchedFromApi,
     };
   } catch (err: any) {
     if (err?.message && (err.message.includes('401') || err.message.includes('403'))) {
@@ -503,6 +704,147 @@ export async function listMessages(
       resultSizeEstimate: fallbackEmails.length,
     };
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* SYNCHRONISATION INCRÉMENTALE (API History)                                  */
+/* -------------------------------------------------------------------------- */
+
+export interface HistoryChangeSet {
+  hasChanges: boolean;
+  historyId?: string;
+  changedThreadIds: Set<string>;
+  /** historyId trop ancien : il faut refaire un chargement complet. */
+  expired: boolean;
+}
+
+/**
+ * Vérifie en UNE SEULE requête si la boîte a changé depuis `startHistoryId`.
+ * Permet de ne plus re-télécharger toute la boîte à chaque tic de synchronisation.
+ */
+export async function fetchHistoryChanges(
+  token: string,
+  startHistoryId: string
+): Promise<HistoryChangeSet> {
+  const empty: HistoryChangeSet = {
+    hasChanges: false,
+    changedThreadIds: new Set<string>(),
+    expired: false,
+  };
+
+  if (!startHistoryId) return { ...empty, expired: true };
+
+  const url = new URL(`${GMAIL_BASE}/history`);
+  url.searchParams.set('startHistoryId', startHistoryId);
+  url.searchParams.set('maxResults', '200');
+  ['messageAdded', 'messageDeleted', 'labelAdded', 'labelRemoved'].forEach((type) =>
+    url.searchParams.append('historyTypes', type)
+  );
+
+  const res = await fetch(url.toString(), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (res.status === 404) {
+    // historyId expiré : on repart sur un chargement complet
+    return { ...empty, expired: true };
+  }
+
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => null);
+    const msg = errJson?.error?.message || `Failed to list history (${res.status})`;
+    notifyIfAuthError(res.status, msg);
+    throw new Error(msg);
+  }
+
+  const data = await res.json();
+  const records: any[] = data.history || [];
+  const changedThreadIds = new Set<string>();
+
+  for (const record of records) {
+    const collect = (entry: any) => {
+      const message = entry?.message;
+      if (!message) return;
+      const threadId: string | undefined = message.threadId;
+      if (message.id && threadId) messageThreadIndex.set(message.id, threadId);
+      if (threadId) changedThreadIds.add(threadId);
+      else if (message.id) {
+        const known = messageThreadIndex.get(message.id);
+        if (known) changedThreadIds.add(known);
+      }
+    };
+
+    (record.messagesAdded || []).forEach(collect);
+    (record.messagesDeleted || []).forEach(collect);
+    (record.labelsAdded || []).forEach(collect);
+    (record.labelsRemoved || []).forEach(collect);
+  }
+
+  return {
+    hasChanges: records.length > 0,
+    historyId: data.historyId,
+    changedThreadIds,
+    expired: false,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* VIDAGE COMPLET CORBEILLE / SPAM                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Supprime DÉFINITIVEMENT tous les messages d'un dossier système (Corbeille, Spam),
+ * y compris ceux qui ne sont pas dans la page affichée.
+ */
+export async function emptySystemFolder(
+  token: string,
+  folder: 'TRASH' | 'SPAM',
+  maxItems = 5000
+): Promise<number> {
+  const query = folder === 'TRASH' ? 'in:trash' : 'in:spam';
+  let pageToken: string | undefined = undefined;
+  let deleted = 0;
+  let guard = 0;
+
+  while (deleted < maxItems && guard < 40) {
+    guard++;
+
+    const url = new URL(`${GMAIL_BASE}/messages`);
+    url.searchParams.set('maxResults', '500');
+    url.searchParams.set('includeSpamTrash', 'true');
+    url.searchParams.set('q', query);
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      const msg = errJson?.error?.message || `Failed to list ${folder} messages (${res.status})`;
+      notifyIfAuthError(res.status, msg);
+      throw new Error(msg);
+    }
+
+    const data = await res.json();
+    const ids: string[] = (data.messages || []).map((m: { id: string }) => m.id);
+    pageToken = data.nextPageToken;
+
+    if (ids.length === 0) break;
+
+    // batchDelete accepte au maximum 1000 identifiants par appel
+    for (let i = 0; i < ids.length; i += 500) {
+      await batchDeleteMessages(token, ids.slice(i, i + 500));
+    }
+    deleted += ids.length;
+
+    if (!pageToken) break;
+  }
+
+  // Les conversations supprimées ne doivent plus sortir du cache
+  clearThreadCache();
+
+  return deleted;
 }
 
 export async function getMessage(token: string, id: string): Promise<ParsedEmail> {

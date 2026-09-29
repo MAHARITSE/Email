@@ -451,6 +451,8 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [inlineAiTone, setInlineAiTone] = useState<AiTone>('professionnel');
   const [detectedEmailLang, setDetectedEmailLang] = useState<AiLanguage>('Français');
   const [inlineAiLanguage, setInlineAiLanguage] = useState<AiLanguage>('Français');
+  /** Mémorise le courriel auquel la langue détectée a été appliquée. */
+  const appliedLangKeyRef = useRef<string>('');
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [taskAddedFeedback, setTaskAddedFeedback] = useState(false);
 
@@ -458,6 +460,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [smartReplies, setSmartReplies] = useState<SmartReplySuggestion[]>([]);
   const [isLoadingSmartReplies, setIsLoadingSmartReplies] = useState(false);
   const [smartReplyAppliedLabel, setSmartReplyAppliedLabel] = useState<string | null>(null);
+  const [smartReplyError, setSmartReplyError] = useState<string | null>(null);
 
   const fetchSmartReplies = async () => {
     // ALWAYS target the external correspondent message in the conversation, never user's own sent message
@@ -469,6 +472,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     const subjectContent = correspondentMsg.subject || email.subject || '';
 
     setIsLoadingSmartReplies(true);
+    setSmartReplyError(null);
     try {
       const suggestions = await getSmartReplySuggestions(
         subjectContent,
@@ -479,16 +483,25 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
         inlineAiTone
       );
       setSmartReplies(suggestions);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Smart replies fetch error:', err);
+      setSmartReplies([]);
+      setSmartReplyError(err?.message || 'Suggestions IA momentanément indisponibles.');
     } finally {
       setIsLoadingSmartReplies(false);
     }
   };
 
+  // Régénération automatique dès que le message, la LANGUE choisie ou le ton changent.
+  // Le léger délai évite de lancer une requête IA à chaque courriel survolé.
   useEffect(() => {
-    fetchSmartReplies();
-  }, [email.id, replyTargetEmail?.id, detectedEmailLang]);
+    setSmartReplies([]);
+    setSmartReplyError(null);
+    const timer = setTimeout(() => {
+      fetchSmartReplies();
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [email.id, replyTargetEmail?.id, inlineAiLanguage, inlineAiTone]);
 
   const handleApplySmartReply = (suggestion: SmartReplySuggestion) => {
     const correspondentMsg = !isMessageFromCurrentUser(replyTargetEmail)
@@ -546,8 +559,16 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     const bodyContent = targetMsg.bodyText || targetMsg.snippet;
     const detected = detectEmailLanguage(bodyContent, targetMsg.subject || email.subject);
     setDetectedEmailLang(detected);
-    setInlineAiLanguage(detected);
-  }, [replyTargetEmail, threadMessages, email]);
+
+    // La langue détectée n'est appliquée qu'à l'ouverture d'un nouveau courriel :
+    // ainsi le choix manuel de l'utilisateur (ex. répondre en Français) n'est plus
+    // écrasé à chaque rechargement du fil de discussion.
+    const threadKey = `${email.id}:${replyTargetEmail?.id || ''}`;
+    if (appliedLangKeyRef.current !== threadKey) {
+      appliedLangKeyRef.current = threadKey;
+      setInlineAiLanguage(detected);
+    }
+  }, [email.id, replyTargetEmail?.id, threadMessages]);
 
   // Resolve inline CID image attachments automatically
   useEffect(() => {
@@ -2110,12 +2131,45 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               </div>
               <span className="text-xs font-bold font-mono tracking-wide flex items-center gap-1.5">
                 <span>Réponses automatiques IA</span>
-                <span className={`text-[10px] px-2 py-0.2 rounded-full border ${
-                  isDark ? 'bg-cyan-950/60 text-cyan-300 border-cyan-800/60' : 'bg-cyan-100 text-cyan-800 border-cyan-300'
-                }`}>
-                  {detectedEmailLang}
-                </span>
               </span>
+
+              {/* Choix de la langue des suggestions (Français par défaut si détecté) */}
+              <select
+                id="smart-reply-language-select"
+                value={inlineAiLanguage}
+                onChange={(e) => setInlineAiLanguage(e.target.value as AiLanguage)}
+                title={`Langue des réponses IA (langue détectée : ${detectedEmailLang})`}
+                className={`h-6 px-1.5 rounded-lg text-[10px] font-mono font-bold border outline-none cursor-pointer ${
+                  isDark
+                    ? 'bg-[#0E131F] border-cyan-800/60 text-cyan-300'
+                    : 'bg-white border-cyan-300 text-cyan-900'
+                }`}
+              >
+                {LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.flag} {l.label}
+                  </option>
+                ))}
+              </select>
+
+              {/* Choix du ton des suggestions */}
+              <select
+                id="smart-reply-tone-select"
+                value={inlineAiTone}
+                onChange={(e) => setInlineAiTone(e.target.value as AiTone)}
+                title="Ton des réponses IA"
+                className={`h-6 px-1.5 rounded-lg text-[10px] font-mono border outline-none cursor-pointer ${
+                  isDark
+                    ? 'bg-[#0E131F] border-slate-700 text-slate-300'
+                    : 'bg-white border-slate-300 text-slate-700'
+                }`}
+              >
+                {TONES.map((t) => (
+                  <option key={t.code} value={t.code}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <button
@@ -2139,6 +2193,24 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               )}
             </button>
           </div>
+
+          {/* Avertissement quota IA / indisponibilité */}
+          {smartReplyError && (
+            <div className={`mb-2 text-[11px] font-mono px-2.5 py-1 rounded-lg flex items-center justify-between gap-2 border ${
+              isDark
+                ? 'text-amber-300 bg-amber-950/30 border-amber-500/30'
+                : 'text-amber-800 bg-amber-50 border-amber-300'
+            }`}>
+              <span>⚠️ {smartReplyError}</span>
+              <button
+                type="button"
+                onClick={fetchSmartReplies}
+                className={`underline shrink-0 cursor-pointer ${isDark ? 'hover:text-amber-100' : 'hover:text-amber-900'}`}
+              >
+                Réessayer
+              </button>
+            </div>
+          )}
 
           {/* Feedback banner when smart reply is applied */}
           {smartReplyAppliedLabel && (
@@ -2190,7 +2262,10 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               <button
                 type="button"
                 onClick={fetchSmartReplies}
-                className="text-xs font-mono text-cyan-400 hover:underline py-1 cursor-pointer"
+                className={`text-xs font-mono hover:underline py-1 cursor-pointer ${
+                  isDark ? 'text-cyan-400' : 'text-cyan-700'
+                }`}
+                title="Générer 3 réponses prêtes à envoyer avec l'IA"
               >
                 + Obtenir des réponses suggérées par l'IA
               </button>

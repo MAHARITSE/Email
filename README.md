@@ -17,7 +17,9 @@
 - 📄 **Lecteur PDF intégré** — les PDF s'ouvrent directement dans l'application (pdf.js) : défilement continu, zoom, rotation, recherche plein texte avec surlignage, prise en charge des PDF protégés par mot de passe
 - 📊 **Aperçus multi-formats** — tableurs Excel/CSV (grille interactive multi-feuilles), documents Word `.docx`, images, fichiers texte/code
 - 🤖 **Assistant IA Gemini** — suggestions de réponses intelligentes, reformulation (professionnel / concis / correction), génération de réponses personnalisées
-- 🗂️ **Classification automatique** — catégories Pro / Personnel / Sites web
+- 🗂️ **Classification automatique** — catégories Pro / Personnel / Sites web (chaque courriel n'est envoyé à l'IA qu'une seule fois)
+- ⚡ **Synchronisation intelligente** — l'API History de Gmail détecte les changements en une seule requête : la boîte n'est re-téléchargée que si c'est nécessaire (plus de rafraîchissement toutes les 35 s)
+- 🗑️ **Corbeille & Spam fiables** — repli automatique sur une recherche au niveau des messages si l'API conversations ne remonte rien, et vidage complet du dossier (toutes pages)
 - 👥 **Gestionnaire de contacts** — favoris VIP, autocomplétion, import automatique
 - ✍️ **Signatures multiples** — signature par défaut par contexte (nouveau message / réponse)
 - 🔐 **Authentification OAuth 2.0** — jetons conservés en local, aucun serveur intermédiaire pour vos données
@@ -45,6 +47,23 @@ npm run dev
 ```
 
 L'application démarre sur `http://localhost:3000`.
+
+### Assistant IA : quotas et bascule de modèle
+
+En cas de **quota quotidien atteint** (429 `RESOURCE_EXHAUSTED`), le serveur bascule
+automatiquement et sans attendre sur une **version antérieure** de Gemini, puis met le
+modèle épuisé en quarantaine jusqu'à la réinitialisation du quota (minuit, heure du
+Pacifique). La chaîne par défaut est :
+
+```
+gemini-3.8-flash -> gemini-flash-latest -> gemini-3.1-flash-lite
+-> gemini-2.5-flash -> gemini-2.5-flash-lite -> gemini-2.0-flash
+-> gemini-1.5-flash -> gemini-1.5-flash-8b
+```
+
+Personnalisable avec `GEMINI_MODEL` (modèle prioritaire) et/ou `GEMINI_MODEL_CHAIN`
+(chaîne complète, séparée par des virgules). `GET /api/health` restitue l'état de
+chaque modèle (`available`, `reason`, `availableInMs`).
 
 ```bash
 npm run build   # Build production (client + serveur)
