@@ -314,8 +314,20 @@ export default function App() {
 
           // Do not restrict to labelIds when searching so Gmail searches all mail contents
           params.query = queryParts.join(' ');
+        } else if (labelId === 'TRASH') {
+          // Gmail API official standard for Trash
+          params.query = 'in:trash';
+          if (filter === 'unread') params.query += ' is:unread';
+          else if (filter === 'starred') params.query += ' is:starred';
+          params.labelIds = undefined;
+        } else if (labelId === 'SPAM') {
+          // Gmail API official standard for Spam
+          params.query = 'in:spam';
+          if (filter === 'unread') params.query += ' is:unread';
+          else if (filter === 'starred') params.query += ' is:starred';
+          params.labelIds = undefined;
         } else {
-          // Standard Gmail system folders mapping
+          // Standard Gmail system folders mapping (INBOX, SENT, DRAFT, etc.)
           params.labelIds = [labelId];
           if (filter === 'unread') {
             params.query = 'is:unread';

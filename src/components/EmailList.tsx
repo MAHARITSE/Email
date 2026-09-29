@@ -157,7 +157,16 @@ export const EmailList: React.FC<EmailListProps> = ({
   const threadGroups = useMemo(() => {
     const threadMap = new Map<string, ParsedEmail[]>();
 
-    emails.forEach((email) => {
+    // Strict safety filter for folder context
+    const scopedEmails = selectedLabelId === 'TRASH'
+      ? emails.filter((m) => m.labelIds && m.labelIds.includes('TRASH'))
+      : selectedLabelId === 'SPAM'
+      ? emails.filter((m) => m.labelIds && m.labelIds.includes('SPAM'))
+      : selectedLabelId === 'INBOX'
+      ? emails.filter((m) => !m.labelIds?.includes('TRASH') && !m.labelIds?.includes('SPAM'))
+      : emails;
+
+    scopedEmails.forEach((email) => {
       const key = email.threadId || email.id;
       const list = threadMap.get(key) || [];
       list.push(email);

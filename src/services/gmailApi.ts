@@ -362,10 +362,15 @@ export async function listMessages(
 ): Promise<ListMessagesResponse> {
   try {
     const requestedMax = params.maxResults || 50;
-    const isSpamOrTrash =
-      params.labelIds?.some((id) => id === 'SPAM' || id === 'TRASH') ||
-      params.query?.toLowerCase().includes('spam') ||
-      params.query?.toLowerCase().includes('trash');
+    const isTrash =
+      params.labelIds?.includes('TRASH') ||
+      Boolean(params.query && (params.query.toLowerCase().includes('in:trash') || params.query.toLowerCase().includes('is:trash')));
+
+    const isSpam =
+      params.labelIds?.includes('SPAM') ||
+      Boolean(params.query && (params.query.toLowerCase().includes('in:spam') || params.query.toLowerCase().includes('is:spam')));
+
+    const isSpamOrTrash = isTrash || isSpam;
 
     // Fetch conversations (threads) so each thread/conversation (regardless of reply count) counts as 1 item
     const url = new URL(`${GMAIL_BASE}/threads`);
@@ -374,11 +379,26 @@ export async function listMessages(
       url.searchParams.set('includeSpamTrash', 'true');
     }
 
-    if (params.query && params.query.trim()) {
-      url.searchParams.set('q', params.query.trim());
+    let effectiveQuery = params.query ? params.query.trim() : '';
+    if (isTrash) {
+      if (!effectiveQuery.toLowerCase().includes('in:trash') && !effectiveQuery.toLowerCase().includes('is:trash')) {
+        effectiveQuery = effectiveQuery ? `in:trash ${effectiveQuery}` : 'in:trash';
+      }
+    } else if (isSpam) {
+      if (!effectiveQuery.toLowerCase().includes('in:spam') && !effectiveQuery.toLowerCase().includes('is:spam')) {
+        effectiveQuery = effectiveQuery ? `in:spam ${effectiveQuery}` : 'in:spam';
+      }
     }
+
+    if (effectiveQuery) {
+      url.searchParams.set('q', effectiveQuery);
+    }
+
+    // Gmail API threads.list expects in:trash / in:spam in query with includeSpamTrash=true (do not pass labelIds=TRASH or SPAM)
     if (params.labelIds && params.labelIds.length > 0) {
-      params.labelIds.forEach((id) => url.searchParams.append('labelIds', id));
+      params.labelIds
+        .filter((id) => id !== 'TRASH' && id !== 'SPAM')
+        .forEach((id) => url.searchParams.append('labelIds', id));
     }
     if (params.pageToken) {
       url.searchParams.set('pageToken', params.pageToken);
@@ -422,7 +442,16 @@ export async function listMessages(
     });
 
     const resolvedLists = await Promise.all(detailPromises);
-    const emails = resolvedLists.flat();
+    let emails = resolvedLists.flat();
+
+    // Strict label isolation: Corbeille must ONLY contain messages in TRASH, and active folders must NEVER contain trashed messages
+    if (isTrash) {
+      emails = emails.filter((m) => m.labelIds && m.labelIds.includes('TRASH'));
+    } else if (isSpam) {
+      emails = emails.filter((m) => m.labelIds && m.labelIds.includes('SPAM'));
+    } else {
+      emails = emails.filter((m) => !m.labelIds?.includes('TRASH') && !m.labelIds?.includes('SPAM'));
+    }
 
     return {
       emails,
