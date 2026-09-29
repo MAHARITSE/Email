@@ -248,17 +248,17 @@ export const SignInPrompt: React.FC<SignInPromptProps> = ({ onSignIn, isLoading,
           </button>
         </div>
 
-        <details open className="rounded-lg border border-slate-600 p-3 text-xs">
-          <summary className="cursor-pointer font-semibold">Configuration OAuth — erreur 401 invalid_client</summary>
+        <details open className="rounded-lg border border-cyan-500/40 bg-cyan-500/5 p-3 text-xs">
+          <summary className="cursor-pointer font-semibold text-cyan-300">Modifier l’ID client Google si nécessaire</summary>
           <div className="mt-3 space-y-3">
-            <p>Si Google affiche « The OAuth client was not found », vérifiez que le client existe dans votre projet Google Cloud et qu'il est de type Application Web. Un ID au bon format ne garantit pas son existence.</p>
+            <p>Vous pouvez modifier l’ID OAuth directement depuis cette page d’accueil, avant de vous connecter. Si Google affiche « The OAuth client was not found », vérifiez que le client existe dans votre projet Google Cloud et qu'il est de type Application Web. Un ID au bon format ne garantit pas son existence.</p>
             <a href={gcpCredentialsUrl} target="_blank" rel="noopener noreferrer" className="text-cyan-500 underline">Ouvrir les identifiants Google Cloud</a>
             <p>Autorisez cette origine JavaScript sur ce client : <code className="break-all select-all">{currentOrigin}</code></p>
             <p>ID actuellement utilisé :</p>
             <code className="block break-all whitespace-normal select-all rounded bg-slate-500/10 p-2">{getStoredClientId() || 'Aucun ID configuré'}</code>
             <label htmlFor="oauth-client-id" className="block">ID client OAuth (public, jamais le secret client)</label>
             <input id="oauth-client-id" value={clientId} onChange={(event) => { setClientId(event.target.value); setConfigStatus(''); }} disabled={isLoading} spellCheck={false} autoComplete="off" placeholder="123456789-…apps.googleusercontent.com" className="w-full rounded border border-slate-500 bg-transparent p-2 select-text" />
-            <p>Ce réglage est prioritaire et ne concerne que ce navigateur. Pour tous les visiteurs, définissez VITE_GOOGLE_CLIENT_ID puis reconstruisez et redéployez le site.</p>
+            <p>L’ID enregistré ici sera utilisé à la prochaine connexion sur ce navigateur, sans redéploiement. Ce réglage ne concerne que ce navigateur. Pour tous les visiteurs, définissez VITE_GOOGLE_CLIENT_ID puis reconstruisez et redéployez le site.</p>
             <div className="flex gap-3">
               <button type="button" disabled={isLoading} className="underline" onClick={() => {
                 const value = clientId.trim();
