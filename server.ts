@@ -553,6 +553,27 @@ async function startServer() {
   const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
   const isProduction = process.env.NODE_ENV === 'production' || hasDist;
 
+  // Explicit public privacy policy and terms endpoints for Google OAuth Verification crawlers
+  app.get(['/privacy', '/privacy.html'], (req, res) => {
+    const privacyPath = isProduction
+      ? path.join(distPath, 'privacy.html')
+      : path.join(process.cwd(), 'public', 'privacy.html');
+    if (fs.existsSync(privacyPath)) {
+      return res.sendFile(privacyPath);
+    }
+    return res.sendFile(hasDist ? path.join(distPath, 'index.html') : path.join(process.cwd(), 'index.html'));
+  });
+
+  app.get(['/terms', '/terms.html'], (req, res) => {
+    const termsPath = isProduction
+      ? path.join(distPath, 'terms.html')
+      : path.join(process.cwd(), 'public', 'terms.html');
+    if (fs.existsSync(termsPath)) {
+      return res.sendFile(termsPath);
+    }
+    return res.sendFile(hasDist ? path.join(distPath, 'index.html') : path.join(process.cwd(), 'index.html'));
+  });
+
   if (!isProduction) {
     try {
       const vite = await createViteServer({

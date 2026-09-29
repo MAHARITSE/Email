@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Règles de confidentialité — Maharitse Mail</title>
+    <meta name="description" content="Règles de confidentialité et politique de traitement des données de l'application Maharitse Mail (https://email.maharitse.workers.dev)." />
+    <style>
+      :root {
+        --bg: #05070a;
+        --card-bg: #0b101b;
+        --text: #e2e8f0;
+        --text-muted: #94a3b8;
+        --accent: #22d3ee;
+        --border: #1e293b;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f8fafc;
+          --card-bg: #ffffff;
+          --text: #0f172a;
+          --text-muted: #64748b;
+          --accent: #0891b2;
+          --border: #e2e8f0;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 40px 20px;
+        background-color: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.65;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background-color: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 32px 40px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+      }
+      h1 {
+        font-size: 26px;
+        color: var(--accent);
+        margin-top: 0;
+        margin-bottom: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      h2 {
+        font-size: 18px;
+        color: var(--accent);
+        margin-top: 28px;
+        margin-bottom: 10px;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 6px;
+      }
+      p, li {
+        font-size: 14px;
+        color: var(--text);
+      }
+      .muted {
+        color: var(--text-muted);
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      .highlight-box {
+        background: rgba(34, 211, 238, 0.08);
+        border: 1px solid rgba(34, 211, 238, 0.3);
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin: 20px 0;
+      }
+      a {
+        color: var(--accent);
+        text-decoration: underline;
+      }
+      a:hover {
+        opacity: 0.8;
+      }
+      .back-btn {
+        display: inline-block;
+        margin-bottom: 24px;
+        font-size: 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--accent);
+        text-decoration: none;
+      }
+      ul {
+        padding-left: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <a href="/" class="back-btn">&larr; Retour à l'accueil Maharitse Mail</a>
+      
+      <h1>Règles de confidentialité — Maharitse Mail</h1>
+      <p class="muted">Dernière mise à jour : 29 septembre 2026 • Version 1.2</p>
+
+      <h2>1. Présentation de l'application et de l'éditeur</h2>
+      <p>
+        L'application <strong>Maharitse Mail</strong> (accessible à l'adresse officielle <code>https://email.maharitse.workers.dev</code>) est un client web de messagerie sécurisé développé et exploité par <strong>MAHARITSE Hyacinthe Bertrand</strong>.
+      </p>
+      <p>
+        <strong>Contact de l'éditeur :</strong><br />
+        Nom : MAHARITSE Hyacinthe Bertrand<br />
+        Adresse e-mail : <a href="mailto:maharitse@gmail.com">maharitse@gmail.com</a><br />
+        Téléphone : +261 38 34 092 61<br />
+        Site web : <a href="https://email.maharitse.workers.dev">https://email.maharitse.workers.dev</a>
+      </p>
+
+      <h2>2. Données collectées et finalités</h2>
+      <p>
+        Maharitse Mail utilise le protocole officiel <strong>Google OAuth 2.0</strong> pour vous permettre d'accéder à votre boîte aux lettres Gmail en toute sécurité, sans que votre mot de passe ne soit jamais partagé avec l'application.
+      </p>
+      <p>Lors de votre connexion, nous demandons uniquement les portées d'autorisation (scopes) nécessaires au fonctionnement de l'application :</p>
+      <ul>
+        <li><strong>Adresse e-mail et profil de base (userinfo.email, userinfo.profile) :</strong> nécessaires pour identifier votre compte, afficher votre adresse et votre photo de profil dans l'en-tête de l'application.</li>
+        <li><strong>Lecture de vos e-mails et pièces jointes (gmail.readonly) :</strong> nécessaire pour afficher vos messages, rechercher vos courriels, lire les fils de discussion et afficher ou télécharger les pièces jointes (documents PDF, feuilles de calcul, images) à votre demande expresse.</li>
+        <li><strong>Envoi de courriels (gmail.send) :</strong> nécessaire uniquement pour expédier les messages ou les réponses que vous rédigez et validez manuellement vous-même.</li>
+      </ul>
+
+      <div class="highlight-box">
+        <h3 style="margin-top: 0; font-size: 15px; color: var(--accent);">3. Respect des Règles relatives aux données utilisateur des services d'API Google</h3>
+        <p style="margin-bottom: 0;">
+          L'utilisation et le transfert par <strong>Maharitse Mail</strong> à toute autre application des informations reçues des API Google respectent scrupuleusement les 
+          <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">
+            Règles relatives aux données utilisateur des services d'API Google
+          </a>, y compris les exigences relatives à l'utilisation limitée (<strong>Limited Use Requirements</strong>).
+        </p>
+        <ul>
+          <li><strong>Aucune revente de données :</strong> Vos données et courriels ne sont jamais vendus, loués ou cédés à des tiers ou des courtiers de données.</li>
+          <li><strong>Aucun ciblage publicitaire :</strong> Aucune donnée issue de Gmail n'est utilisée pour diffuser des annonces publicitaires personnalisées ou non.</li>
+          <li><strong>Pas d'entraînement d'IA généraliste :</strong> Vos courriels et contenus ne sont jamais utilisés pour entraîner des modèles de fondation ou d'intelligence artificielle généralistes.</li>
+          <li><strong>Aucune intervention humaine :</strong> Aucun être humain ne lit vos messages, sauf si vous nous donnez votre consentement explicite pour résoudre un bogue technique ou si la loi l'exige.</li>
+        </ul>
+      </div>
+
+      <h2>4. Stockage et sécurité des données</h2>
+      <p>
+        La sécurité de vos données est une priorité absolue :
+      </p>
+      <ul>
+        <li><strong>Chiffrement en transit (HTTPS / TLS) :</strong> Toutes les communications entre votre navigateur, notre hébergement Cloudflare Workers et les serveurs de Google sont intégralement chiffrées selon les protocoles de chiffrement les plus récents (TLS 1.3).</li>
+        <li><strong>Traitement côté client :</strong> Le contenu de vos courriels et pièces jointes est affiché directement dans votre navigateur. Aucune copie de vos messages n'est stockée sur une base de données tierce ou un serveur externe.</li>
+        <li><strong>Conservation des jetons :</strong> Vos jetons d'accès Google OAuth sont conservés uniquement dans la mémoire sécurisée de votre navigateur et peuvent être supprimés en un clic lors de votre déconnexion.</li>
+      </ul>
+
+      <h2>5. Partage avec des tiers</h2>
+      <p>
+        <strong>Maharitse Mail ne partage, ne vend et ne divulgue aucune de vos données personnelles ou de messagerie à aucun tiers</strong>, partenaire commercial ou réseau publicitaire.
+      </p>
+
+      <h2>6. Vos droits et révocation de l'accès</h2>
+      <p>
+        Conformément aux réglementations sur la protection de la vie privée, vous disposez d'un contrôle total sur vos données :
+      </p>
+      <ul>
+        <li>Vous pouvez vous déconnecter à tout moment en cliquant sur le bouton <strong>« Se déconnecter »</strong> de l'application, ce qui supprime immédiatement vos jetons de votre session locale.</li>
+        <li>Vous pouvez révoquer définitivement l'autorisation accordée à Maharitse Mail à tout moment depuis les paramètres de votre compte Google : 
+          <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">https://myaccount.google.com/permissions</a>.
+        </li>
+      </ul>
+
+      <h2>7. Modifications de la présente politique</h2>
+      <p>
+        Toute mise à jour substantielle des présentes règles de confidentialité sera publiée directement sur cette page avec mise à jour de la date d'effet.
+      </p>
+
+      <h2>8. Contact pour vos questions</h2>
+      <p>
+        Pour toute question ou demande relative à vos données ou à la présente politique de confidentialité, vous pouvez contacter directement le développeur :<br />
+        <strong>MAHARITSE Hyacinthe Bertrand</strong><br />
+        Courriel : <a href="mailto:maharitse@gmail.com">maharitse@gmail.com</a><br />
+        Téléphone : +261 38 34 092 61
+      </p>
+    </div>
+  </body>
+</html>

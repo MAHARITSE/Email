@@ -353,7 +353,7 @@ export const Header: React.FC<HeaderProps> = ({
               isDark ? 'text-white' : 'text-slate-900'
             }`}
           >
-            Gmail<span className="text-cyan-500">-Pro</span>
+            Maharitse<span className="text-cyan-500"> Mail</span>
           </span>
         </div>
       </div>
