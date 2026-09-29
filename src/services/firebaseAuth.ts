@@ -8,7 +8,14 @@ import {
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-export const SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
+export const SCOPES = [
+  'https://mail.google.com/',
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/calendar.events.readonly',
+  'https://www.googleapis.com/auth/calendar.events',
+];
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
@@ -39,31 +46,36 @@ export const initAuth = (
   onAuthFailure?: () => void
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (!cachedAccessToken && typeof window !== 'undefined') {
-        try {
-          cachedAccessToken = window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
-        } catch {
-          // Ignore
-        }
-      }
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        // Token was not preserved in memory after refresh; user can click sign-in
-        cachedAccessToken = null;
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else {
-      cachedAccessToken = null;
+    let token = cachedAccessToken;
+    if (!token && typeof window !== 'undefined') {
       try {
-        if (typeof window !== 'undefined') {
-          window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-        }
+        token =
+          window.sessionStorage.getItem(TOKEN_STORAGE_KEY) ||
+          window.localStorage.getItem(TOKEN_STORAGE_KEY);
       } catch {
         // Ignore
       }
-      if (onAuthFailure) onAuthFailure();
+    }
+
+    if (user && token) {
+      cachedAccessToken = token;
+      if (onAuthSuccess) onAuthSuccess(user, token);
+    } else if (!user) {
+      // Do not wipe storage or fail if universal token exists (e.g. via GSI direct login)
+      let hasStorageToken = false;
+      if (typeof window !== 'undefined') {
+        try {
+          hasStorageToken = Boolean(
+            window.sessionStorage.getItem(TOKEN_STORAGE_KEY) ||
+            window.localStorage.getItem(TOKEN_STORAGE_KEY)
+          );
+        } catch {}
+      }
+
+      if (!hasStorageToken) {
+        cachedAccessToken = null;
+        if (onAuthFailure) onAuthFailure();
+      }
     }
   });
 };

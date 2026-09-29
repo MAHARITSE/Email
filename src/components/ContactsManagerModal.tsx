@@ -25,6 +25,7 @@ import {
   updateContactCategory,
   toggleContactFavorite,
   importContactsFromParsedEmails,
+  clearAllContactsForAccount,
 } from '../services/contactsService';
 import { ParsedEmail } from '../types/gmail';
 import { useTheme } from '../context/ThemeContext';
@@ -76,7 +77,7 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
   const [importStatus, setImportStatus] = useState<string | null>(null);
 
   const reloadContacts = () => {
-    setContacts(getLocalContacts());
+    setContacts(getLocalContacts(currentUserEmail));
   };
 
   useEffect(() => {
@@ -86,7 +87,7 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
       setEditingContactId(null);
       setImportStatus(null);
     }
-  }, [isOpen]);
+  }, [isOpen, currentUserEmail]);
 
   // Filtered contacts
   const filteredContacts = useMemo(() => {
@@ -169,16 +170,19 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
       return;
     }
 
-    saveLocalContact({
-      id: editingContactId || undefined,
-      name: formData.name.trim() || formData.email.split('@')[0],
-      email: formData.email.trim(),
-      category: formData.category,
-      company: formData.company.trim(),
-      phone: formData.phone.trim(),
-      notes: formData.notes.trim(),
-      isFavorite: formData.isFavorite,
-    });
+    saveLocalContact(
+      {
+        id: editingContactId || undefined,
+        name: formData.name.trim() || formData.email.split('@')[0],
+        email: formData.email.trim(),
+        category: formData.category,
+        company: formData.company.trim(),
+        phone: formData.phone.trim(),
+        notes: formData.notes.trim(),
+        isFavorite: formData.isFavorite,
+      },
+      currentUserEmail
+    );
 
     reloadContacts();
     setIsAdding(false);
@@ -187,7 +191,7 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
 
   const handleDelete = (id: string, name: string) => {
     if (window.confirm(`Supprimer définitivement le contact "${name}" ?`)) {
-      deleteLocalContact(id);
+      deleteLocalContact(id, currentUserEmail);
       reloadContacts();
       if (editingContactId === id) {
         setEditingContactId(null);
@@ -196,7 +200,7 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
   };
 
   const handleToggleFavorite = (id: string) => {
-    toggleContactFavorite(id);
+    toggleContactFavorite(id, undefined, currentUserEmail);
     reloadContacts();
   };
 
@@ -217,16 +221,25 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
     setTimeout(() => setImportStatus(null), 5000);
   };
 
+  const handleClearAccountContacts = () => {
+    if (window.confirm(`Voulez-vous supprimer définitivement tous les contacts enregistrés pour ce compte (${currentUserEmail || 'en cours'}) ?`)) {
+      clearAllContactsForAccount(currentUserEmail);
+      reloadContacts();
+      setImportStatus('Carnet de contacts vidé pour ce compte.');
+      setTimeout(() => setImportStatus(null), 4000);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-4 backdrop-blur-xs select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 sm:p-4 backdrop-blur-xs select-none"
       onClick={onClose}
       id="contacts-manager-modal-backdrop"
     >
       <div
-        className={`relative flex flex-col rounded-2xl shadow-2xl overflow-hidden w-full max-w-5xl h-[88vh] transition-colors ${
+        className={`relative flex flex-col rounded-xl sm:rounded-2xl shadow-2xl overflow-hidden w-full max-w-5xl h-[94dvh] sm:h-[88vh] transition-colors ${
           isDark
             ? 'bg-[#0B0F17] border border-slate-800 text-slate-200'
             : 'bg-white border border-slate-200 text-slate-800'
@@ -236,32 +249,41 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
       >
         {/* Modal Header */}
         <div
-          className={`flex items-center justify-between px-6 py-4 border-b shrink-0 ${
+          className={`flex items-center justify-between px-3 sm:px-6 py-2.5 sm:py-4 border-b shrink-0 gap-2 ${
             isDark ? 'border-slate-800 bg-[#0E131F]' : 'border-slate-200 bg-slate-50'
           }`}
         >
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-[0_0_12px_rgba(34,211,238,0.2)]">
-              <Users className="h-5 w-5" />
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="p-2 sm:p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-[0_0_12px_rgba(34,211,238,0.2)] shrink-0">
+              <Users className="h-4 w-4 sm:h-5 sm:w-5" />
             </div>
-            <div>
-              <h2 className="text-base font-bold tracking-wide flex items-center gap-2">
-                Carnet de Contacts Local
-                <span className="text-[10px] font-mono font-normal px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <h2 className="text-sm sm:text-base font-bold tracking-wide truncate">
+                  Carnet de Contacts
+                </h2>
+                <span className="text-[10px] font-mono font-normal px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shrink-0">
                   {contacts.length} enregistrés
                 </span>
-              </h2>
-              <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Gérez vos contacts professionnels et personnels avec suggestions intelligentes & priorité favoris
+                {currentUserEmail && (
+                  <span className={`hidden md:inline text-[11px] font-mono px-2 py-0.5 rounded-md border ${
+                    isDark ? 'bg-slate-900 border-slate-700 text-cyan-300' : 'bg-slate-100 border-slate-300 text-cyan-800'
+                  }`}>
+                    {currentUserEmail}
+                  </span>
+                )}
+              </div>
+              <p className={`hidden sm:block text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'} truncate`}>
+                Gérez vos contacts propres à {currentUserEmail || 'votre compte en ligne'}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               type="button"
               onClick={handleImportEmails}
-              className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded-lg border transition ${
+              className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono rounded-lg border transition cursor-pointer ${
                 isDark
                   ? 'border-slate-700 bg-slate-800/80 text-cyan-400 hover:bg-slate-700'
                   : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
@@ -269,18 +291,22 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
               title="Scanner les e-mails récents pour extraire les contacts"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>Auto-importer depuis Gmail</span>
+              <span>Auto-importer</span>
             </button>
 
             <button
+              id="contacts-modal-close-btn"
               type="button"
               onClick={onClose}
-              className={`p-2 rounded-lg transition ${
-                isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500 hover:text-black'
+              className={`p-1.5 sm:p-2 rounded-xl border transition cursor-pointer flex items-center justify-center shrink-0 ${
+                isDark
+                  ? 'border-slate-700 bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white'
+                  : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 hover:text-black shadow-xs'
               }`}
-              title="Fermer"
+              title="Fermer le carnet de contacts"
+              aria-label="Fermer le carnet de contacts"
             >
-              <X className="h-5 w-5" />
+              <X className="h-5 w-5 text-cyan-400 sm:text-inherit" />
             </button>
           </div>
         </div>
@@ -630,7 +656,26 @@ export const ContactsManagerModal: React.FC<ContactsManagerModalProps> = ({
               </div>
             )}
           </div>
+        </div>
 
+        {/* Mobile-Only Bottom Close Bar */}
+        <div
+          className={`sm:hidden flex items-center justify-between px-3.5 py-2.5 border-t shrink-0 ${
+            isDark ? 'border-slate-800 bg-[#0E131F]' : 'border-slate-200 bg-slate-50'
+          }`}
+        >
+          <span className="text-[11px] font-mono text-slate-400">
+            {filteredContacts.length} contact(s) affiché(s)
+          </span>
+          <button
+            type="button"
+            id="mobile-contacts-close-btn"
+            onClick={onClose}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-mono font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition active:scale-95 cursor-pointer shadow-xs"
+          >
+            <X className="h-4 w-4" />
+            <span>Fermer</span>
+          </button>
         </div>
       </div>
 

@@ -21,11 +21,20 @@ import {
   Users,
   Send,
   Layers,
+  ArrowUpDown,
+  SlidersHorizontal,
+  LayoutList,
+  Rows,
+  Clock,
+  Sparkles,
+  ChevronDown,
+  AlertOctagon,
 } from 'lucide-react';
 import { ParsedEmail } from '../types/gmail';
 import { useTheme } from '../context/ThemeContext';
 import { EmailCategory, CATEGORIES, classifyEmailFast } from '../services/emailClassifier';
 import { parseEmailAddressList, resolveContactDisplayName } from '../services/contactsService';
+import { isSignatureOrInlineImage } from './EmailDetail';
 
 function formatRecipientsSummary(recipients: Array<{ name: string; email: string }>): string {
   if (!recipients || recipients.length === 0) return 'Destinataire inconnu';
@@ -65,6 +74,8 @@ interface EmailListProps {
   pageIndex: number;
   statusFilter?: 'all' | 'unread' | 'starred';
   onStatusFilterChange?: (status: 'all' | 'unread' | 'starred') => void;
+  onEmptyTrash?: () => void;
+  onEmptySpam?: () => void;
 }
 
 export interface ThreadGroup {
@@ -107,12 +118,19 @@ export const EmailList: React.FC<EmailListProps> = ({
   pageIndex,
   statusFilter,
   onStatusFilterChange,
+  onEmptyTrash,
+  onEmptySpam,
 }) => {
   const { isDark } = useTheme();
   const [contactsVersion, setContactsVersion] = useState(0);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [filterType, setFilterType] = useState<'all' | 'unread' | 'starred'>('all');
   const [activeCategoryMenuId, setActiveCategoryMenuId] = useState<string | null>(null);
+
+  // Sorting & Display mode states - Restricted to requested 3 options
+  const [sortBy, setSortBy] = useState<'date-desc' | 'unread-first' | 'starred-first'>('date-desc');
+  const [displayDensity, setDisplayDensity] = useState<'comfortable' | 'compact'>('comfortable');
+  const [showSortMenu, setShowSortMenu] = useState(false);
 
   const currentFilter = statusFilter !== undefined ? statusFilter : filterType;
 
@@ -153,7 +171,9 @@ export const EmailList: React.FC<EmailListProps> = ({
       const latest = sorted[sorted.length - 1];
       const isUnread = sorted.some((m) => m.isUnread);
       const isStarred = sorted.some((m) => m.isStarred);
-      const hasAttachments = sorted.some((m) => m.attachments && m.attachments.length > 0);
+      const hasAttachments = sorted.some(
+        (m) => m.attachments && m.attachments.some((a) => !isSignatureOrInlineImage(a, m.bodyHtml))
+      );
 
       // Check if thread is in Sent folder or sent by current user
       const isExplicitSentFolder =
@@ -285,18 +305,43 @@ export const EmailList: React.FC<EmailListProps> = ({
     return true;
   });
 
+  // Sort filtered threads dynamically according to user selection (only 3 options)
+  const sortedAndFilteredThreads = useMemo(() => {
+    const list = [...filteredThreads];
+
+    list.sort((a, b) => {
+      switch (sortBy) {
+        case 'unread-first': {
+          if (a.isUnread !== b.isUnread) return a.isUnread ? -1 : 1;
+          return Number(b.latestEmail.internalDate) - Number(a.latestEmail.internalDate);
+        }
+
+        case 'starred-first': {
+          if (a.isStarred !== b.isStarred) return a.isStarred ? -1 : 1;
+          return Number(b.latestEmail.internalDate) - Number(a.latestEmail.internalDate);
+        }
+
+        case 'date-desc':
+        default:
+          return Number(b.latestEmail.internalDate) - Number(a.latestEmail.internalDate);
+      }
+    });
+
+    return list;
+  }, [filteredThreads, sortBy]);
+
   const allFilteredSelected =
-    filteredThreads.length > 0 &&
-    filteredThreads.every((t) => selectedThreadIds.has(t.id));
+    sortedAndFilteredThreads.length > 0 &&
+    sortedAndFilteredThreads.every((t) => selectedThreadIds.has(t.id));
   const someFilteredSelected =
-    filteredThreads.some((t) => selectedThreadIds.has(t.id)) && !allFilteredSelected;
+    sortedAndFilteredThreads.some((t) => selectedThreadIds.has(t.id)) && !allFilteredSelected;
 
   const handleToggleSelectAll = () => {
     if (allFilteredSelected) {
       setSelectedThreadIds(new Set());
     } else {
       const next = new Set<string>();
-      filteredThreads.forEach((t) => next.add(t.id));
+      sortedAndFilteredThreads.forEach((t) => next.add(t.id));
       setSelectedThreadIds(next);
     }
   };
@@ -326,14 +371,14 @@ export const EmailList: React.FC<EmailListProps> = ({
   return (
     <div
       id="email-list-container"
-      className={`flex h-full flex-col overflow-hidden transition-colors ${
+      className={`flex h-full flex-col overflow-hidden transition-colors min-h-0 w-full ${
         isDark ? 'bg-[#05070A] text-slate-300' : 'bg-slate-50 text-slate-700'
       }`}
     >
       {/* Category Tabs Strip: Separation Pro / Perso / Sites */}
       <div
         id="email-category-tabs-bar"
-        className={`flex items-center gap-1.5 px-4 py-2 border-b overflow-x-auto select-none shrink-0 ${
+        className={`flex items-center gap-1.5 px-2.5 sm:px-4 py-1.5 sm:py-2 border-b overflow-x-auto select-none shrink-0 no-scrollbar touch-pan-x ${
           isDark ? 'border-slate-800 bg-[#080B10]' : 'border-slate-200 bg-white'
         }`}
       >
@@ -341,7 +386,7 @@ export const EmailList: React.FC<EmailListProps> = ({
           id="category-tab-all"
           type="button"
           onClick={() => onSelectCategory('all')}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-medium transition shrink-0 cursor-pointer ${
             selectedCategory === 'all'
               ? isDark
                 ? 'bg-slate-800 text-cyan-400 border border-cyan-500/30 font-semibold shadow-xs'
@@ -351,8 +396,9 @@ export const EmailList: React.FC<EmailListProps> = ({
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
-          <Tag className="h-3.5 w-3.5" />
-          <span>Toutes les discussions</span>
+          <Tag className="h-3.5 w-3.5 shrink-0" />
+          <span className="hidden sm:inline">Toutes les discussions</span>
+          <span className="sm:hidden">Tous</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
               isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-100 text-slate-600'
@@ -367,7 +413,7 @@ export const EmailList: React.FC<EmailListProps> = ({
           id="category-tab-pro"
           type="button"
           onClick={() => onSelectCategory('pro')}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-medium transition shrink-0 cursor-pointer ${
             selectedCategory === 'pro'
               ? isDark
                 ? 'bg-cyan-950/60 text-cyan-300 border border-cyan-500/50 font-semibold shadow-[0_0_12px_rgba(34,211,238,0.2)]'
@@ -377,8 +423,9 @@ export const EmailList: React.FC<EmailListProps> = ({
               : 'text-slate-600 hover:text-blue-700 hover:bg-slate-100'
           }`}
         >
-          <Briefcase className={`h-3.5 w-3.5 ${isDark ? 'text-cyan-400' : 'text-blue-600'}`} />
-          <span>Professionnels</span>
+          <Briefcase className={`h-3.5 w-3.5 shrink-0 ${isDark ? 'text-cyan-400' : 'text-blue-600'}`} />
+          <span className="hidden sm:inline">Professionnels</span>
+          <span className="sm:hidden">Pro</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
               isDark ? 'bg-cyan-900/40 text-cyan-300' : 'bg-blue-200/70 text-blue-800'
@@ -393,7 +440,7 @@ export const EmailList: React.FC<EmailListProps> = ({
           id="category-tab-personal"
           type="button"
           onClick={() => onSelectCategory('personal')}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-medium transition shrink-0 cursor-pointer ${
             selectedCategory === 'personal'
               ? isDark
                 ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/50 font-semibold shadow-[0_0_12px_rgba(52,211,153,0.2)]'
@@ -403,8 +450,9 @@ export const EmailList: React.FC<EmailListProps> = ({
               : 'text-slate-600 hover:text-emerald-700 hover:bg-slate-100'
           }`}
         >
-          <User className={`h-3.5 w-3.5 ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`} />
-          <span>Personnels</span>
+          <User className={`h-3.5 w-3.5 shrink-0 ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`} />
+          <span className="hidden sm:inline">Personnels</span>
+          <span className="sm:hidden">Perso</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
               isDark ? 'bg-emerald-900/40 text-emerald-300' : 'bg-emerald-200/70 text-emerald-800'
@@ -419,7 +467,7 @@ export const EmailList: React.FC<EmailListProps> = ({
           id="category-tab-sites"
           type="button"
           onClick={() => onSelectCategory('sites')}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-medium transition shrink-0 cursor-pointer ${
             selectedCategory === 'sites'
               ? isDark
                 ? 'bg-violet-950/60 text-violet-300 border border-violet-500/50 font-semibold shadow-[0_0_12px_rgba(167,139,250,0.2)]'
@@ -429,8 +477,9 @@ export const EmailList: React.FC<EmailListProps> = ({
               : 'text-slate-600 hover:text-purple-700 hover:bg-slate-100'
           }`}
         >
-          <Globe className={`h-3.5 w-3.5 ${isDark ? 'text-violet-400' : 'text-purple-600'}`} />
-          <span>Sites & Notifications</span>
+          <Globe className={`h-3.5 w-3.5 shrink-0 ${isDark ? 'text-violet-400' : 'text-purple-600'}`} />
+          <span className="hidden sm:inline">Sites & Notifications</span>
+          <span className="sm:hidden">Sites</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
               isDark ? 'bg-violet-900/40 text-violet-300' : 'bg-purple-200/70 text-purple-800'
@@ -445,7 +494,7 @@ export const EmailList: React.FC<EmailListProps> = ({
           id="category-tab-other"
           type="button"
           onClick={() => onSelectCategory('other')}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-medium transition shrink-0 cursor-pointer ${
             selectedCategory === 'other'
               ? isDark
                 ? 'bg-amber-950/60 text-amber-300 border border-amber-500/50 font-semibold shadow-[0_0_12px_rgba(245,158,11,0.2)]'
@@ -455,8 +504,9 @@ export const EmailList: React.FC<EmailListProps> = ({
               : 'text-slate-600 hover:text-amber-700 hover:bg-slate-100'
           }`}
         >
-          <Layers className={`h-3.5 w-3.5 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
-          <span>Autres & Divers</span>
+          <Layers className={`h-3.5 w-3.5 shrink-0 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
+          <span className="hidden sm:inline">Autres & Divers</span>
+          <span className="sm:hidden">Autres</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
               isDark ? 'bg-amber-900/40 text-amber-300' : 'bg-amber-200/70 text-amber-800'
@@ -469,7 +519,7 @@ export const EmailList: React.FC<EmailListProps> = ({
 
       {/* Action Toolbar Header */}
       <div
-        className={`flex items-center justify-between border-b px-4 py-2 select-none shrink-0 ${
+        className={`flex items-center justify-between border-b px-2.5 sm:px-4 py-1.5 sm:py-2 select-none shrink-0 gap-2 ${
           isDark
             ? 'border-slate-800 bg-[#080B10]/60'
             : 'border-slate-200 bg-white/60'
@@ -550,25 +600,146 @@ export const EmailList: React.FC<EmailListProps> = ({
                 <Mail className="h-4 w-4" />
               </button>
 
-              {/* Batch Trash */}
+              {/* Batch Trash / Permanent Delete */}
               <button
                 type="button"
                 onClick={() => onRequestBatchTrash(selectedEmailsList)}
-                className={`rounded p-1 transition ${
+                className={`rounded p-1 transition cursor-pointer ${
                   isDark
                     ? 'text-slate-400 hover:bg-red-950/50 hover:text-red-400'
                     : 'text-slate-600 hover:bg-red-50 hover:text-red-600'
                 }`}
-                title="Déplacer vers la corbeille"
+                title={selectedLabelId === 'TRASH' ? 'Supprimer définitivement' : 'Déplacer vers la corbeille'}
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className={`h-4 w-4 ${selectedLabelId === 'TRASH' ? 'text-red-400' : ''}`} />
               </button>
             </div>
           )}
         </div>
 
-        {/* Right side: Sub-filters & Pagination */}
-        <div className="flex items-center gap-3">
+        {/* Right side: Sub-filters, Sort & Density Controls & Pagination */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* SORT & DISPLAY DENSITY CONTROLS */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowSortMenu(!showSortMenu)}
+              className={`flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition cursor-pointer border ${
+                showSortMenu
+                  ? isDark
+                    ? 'bg-cyan-950/60 text-cyan-300 border-cyan-500/50 shadow-xs'
+                    : 'bg-cyan-50 text-cyan-900 border-cyan-300'
+                  : isDark
+                  ? 'bg-slate-900/80 text-slate-300 border-slate-700/80 hover:bg-slate-800'
+                  : 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+              }`}
+              title="Changer l'ordre de tri et la densité d'affichage"
+            >
+              <ArrowUpDown className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+              <span className="hidden sm:inline">
+                {sortBy === 'date-desc' && '🕒 Récents'}
+                {sortBy === 'unread-first' && '📩 Non lus'}
+                {sortBy === 'starred-first' && '⭐ Suivis'}
+              </span>
+              <span className="sm:hidden text-[11px]">
+                {sortBy === 'date-desc' && 'Récents'}
+                {sortBy === 'unread-first' && 'Non lus'}
+                {sortBy === 'starred-first' && 'Suivis'}
+              </span>
+              <ChevronDown className="h-3 w-3 opacity-60" />
+            </button>
+
+            {/* Sort Dropdown Menu */}
+            {showSortMenu && (
+              <div
+                className={`absolute right-0 top-full mt-1.5 w-60 rounded-xl border shadow-2xl z-50 overflow-hidden text-xs p-1.5 animate-in fade-in-50 ${
+                  isDark
+                    ? 'bg-[#0B0F17] border-slate-700 text-slate-200 shadow-[0_10px_30px_rgba(0,0,0,0.8)]'
+                    : 'bg-white border-slate-200 text-slate-800 shadow-xl'
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider text-cyan-400 border-b border-inherit mb-1">
+                  Ordre de tri des e-mails
+                </div>
+
+                <div className="space-y-0.5">
+                  {[
+                    { id: 'date-desc', label: '🕒 Plus récents d\'abord (Par défaut)' },
+                    { id: 'unread-first', label: '📩 Non lus en premier' },
+                    { id: 'starred-first', label: '⭐ Suivis / Étoiles en premier' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setSortBy(opt.id as any);
+                        setShowSortMenu(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-left transition font-mono ${
+                        sortBy === opt.id
+                          ? isDark
+                            ? 'bg-cyan-950/60 text-cyan-300 font-bold border border-cyan-500/30'
+                            : 'bg-cyan-50 text-cyan-900 font-bold border border-cyan-200'
+                          : isDark
+                          ? 'hover:bg-slate-800/60 text-slate-300'
+                          : 'hover:bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      <span>{opt.label}</span>
+                      {sortBy === opt.id && <Check className="h-3.5 w-3.5 text-cyan-400 shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="px-2 py-1 text-[10px] font-mono font-bold uppercase tracking-wider text-cyan-400 border-t border-inherit mt-1.5 pt-1.5 mb-1">
+                  Densité d'affichage
+                </div>
+
+                <div className="grid grid-cols-2 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDisplayDensity('comfortable');
+                      setShowSortMenu(false);
+                    }}
+                    className={`flex items-center justify-center gap-1 py-1 px-2 rounded-lg font-mono text-[11px] transition border cursor-pointer ${
+                      displayDensity === 'comfortable'
+                        ? isDark
+                          ? 'bg-cyan-950 text-cyan-300 border-cyan-500/40 font-bold'
+                          : 'bg-cyan-100 text-cyan-900 border-cyan-300 font-bold'
+                        : isDark
+                        ? 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <LayoutList className="h-3 w-3" />
+                    <span>Aérée</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDisplayDensity('compact');
+                      setShowSortMenu(false);
+                    }}
+                    className={`flex items-center justify-center gap-1 py-1 px-2 rounded-lg font-mono text-[11px] transition border cursor-pointer ${
+                      displayDensity === 'compact'
+                        ? isDark
+                          ? 'bg-cyan-950 text-cyan-300 border-cyan-500/40 font-bold'
+                          : 'bg-cyan-100 text-cyan-900 border-cyan-300 font-bold'
+                        : isDark
+                        ? 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Rows className="h-3 w-3" />
+                    <span>Compacte</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Sub Filters: All / Unread / Starred */}
           <div
             className={`hidden sm:flex items-center rounded-lg p-0.5 text-xs ${
@@ -631,20 +802,45 @@ export const EmailList: React.FC<EmailListProps> = ({
               isDark ? 'border-slate-800' : 'border-slate-200'
             }`}
           >
-            <span className={`text-xs font-mono mr-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-              Page {pageIndex + 1}
+            {/* Range & Page indicator */}
+            <span
+              className={`text-xs font-mono mr-1.5 whitespace-nowrap ${
+                isDark ? 'text-slate-400' : 'text-slate-500'
+              }`}
+              title={
+                selectedCategory !== 'all' || currentFilter !== 'all'
+                  ? `${sortedAndFilteredThreads.length} conversation(s) affichée(s)`
+                  : `Page ${pageIndex + 1}`
+              }
+            >
+              {selectedCategory !== 'all' || currentFilter !== 'all' ? (
+                sortedAndFilteredThreads.length === 0 ? (
+                  '0 message'
+                ) : (
+                  `${sortedAndFilteredThreads.length} sur ${threadGroups.length}`
+                )
+              ) : threadGroups.length === 0 ? (
+                '0 message'
+              ) : (
+                `${pageIndex * 50 + 1}–${pageIndex * 50 + threadGroups.length}`
+              )}
+              {selectedCategory === 'all' && currentFilter === 'all' && threadGroups.length > 0 && (
+                <span className="hidden sm:inline opacity-75 ml-1 font-sans">
+                  (Page {pageIndex + 1})
+                </span>
+              )}
             </span>
             <button
               id="prev-page-btn"
               type="button"
               onClick={onPrevPage}
               disabled={!hasPrevPage || isLoading}
-              className={`rounded p-1 disabled:opacity-30 transition ${
+              className={`rounded p-1 disabled:opacity-30 transition cursor-pointer ${
                 isDark
                   ? 'text-slate-400 hover:bg-slate-800 hover:text-cyan-400'
                   : 'text-slate-500 hover:bg-slate-100 hover:text-cyan-600'
               }`}
-              title="Plus récents"
+              title={hasPrevPage ? `Page précédente (Page ${pageIndex})` : 'Début des résultats'}
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -653,12 +849,12 @@ export const EmailList: React.FC<EmailListProps> = ({
               type="button"
               onClick={onNextPage}
               disabled={!hasNextPage || isLoading}
-              className={`rounded p-1 disabled:opacity-30 transition ${
+              className={`rounded p-1 disabled:opacity-30 transition cursor-pointer ${
                 isDark
                   ? 'text-slate-400 hover:bg-slate-800 hover:text-cyan-400'
                   : 'text-slate-500 hover:bg-slate-100 hover:text-cyan-600'
               }`}
-              title="Plus anciens"
+              title={hasNextPage ? `Page suivante (Page ${pageIndex + 2})` : 'Fin des résultats'}
             >
               <ChevronRight className="h-4 w-4" />
             </button>
@@ -666,9 +862,71 @@ export const EmailList: React.FC<EmailListProps> = ({
         </div>
       </div>
 
+      {/* Corbeille (TRASH) Banner with "Vider la corbeille" button */}
+      {selectedLabelId === 'TRASH' && (
+        <div
+          className={`flex items-center justify-between px-3 sm:px-4 py-2 border-b text-xs font-mono shrink-0 transition-colors ${
+            isDark
+              ? 'bg-red-950/25 border-red-900/40 text-red-300'
+              : 'bg-red-50 border-red-200 text-red-900'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Trash2 className="h-4 w-4 text-red-400 shrink-0" />
+            <span className="truncate text-[11px] sm:text-xs">
+              Les messages de la corbeille peuvent être supprimés définitivement.
+            </span>
+          </div>
+
+          {emails.length > 0 && onEmptyTrash && (
+            <button
+              type="button"
+              id="empty-trash-btn"
+              onClick={onEmptyTrash}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg font-bold transition text-xs border border-red-500/50 bg-red-600 hover:bg-red-500 text-white shrink-0 cursor-pointer shadow-xs active:scale-95 ml-2"
+              title="Supprimer définitivement tous les messages de la corbeille"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Vider la corbeille</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Dossier SPAM Banner with "Supprimer tous les spams" button */}
+      {selectedLabelId === 'SPAM' && (
+        <div
+          className={`flex items-center justify-between px-3 sm:px-4 py-2 border-b text-xs font-mono shrink-0 transition-colors ${
+            isDark
+              ? 'bg-amber-950/25 border-amber-900/40 text-amber-300'
+              : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertOctagon className="h-4 w-4 text-amber-400 shrink-0" />
+            <span className="truncate text-[11px] sm:text-xs">
+              Les messages de spam peuvent être supprimés définitivement en un clic.
+            </span>
+          </div>
+
+          {emails.length > 0 && onEmptySpam && (
+            <button
+              type="button"
+              id="empty-spam-btn"
+              onClick={onEmptySpam}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg font-bold transition text-xs border border-amber-500/50 bg-amber-600 hover:bg-amber-500 text-white shrink-0 cursor-pointer shadow-xs active:scale-95 ml-2"
+              title="Supprimer définitivement tous les messages de spam"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Supprimer tous les spams</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Email / Thread List Rows */}
       <div
-        className={`flex-1 overflow-y-auto divide-y ${
+        className={`flex-1 overflow-y-auto divide-y min-h-0 ${
           isDark ? 'divide-slate-800/60 bg-[#05070A]' : 'divide-slate-200 bg-slate-50'
         }`}
       >
@@ -690,7 +948,7 @@ export const EmailList: React.FC<EmailListProps> = ({
               </div>
             ))}
           </div>
-        ) : filteredThreads.length === 0 ? (
+        ) : sortedAndFilteredThreads.length === 0 ? (
           // Empty State
           <div className="flex h-72 flex-col items-center justify-center p-8 text-center">
             <div
@@ -724,18 +982,21 @@ export const EmailList: React.FC<EmailListProps> = ({
             </p>
           </div>
         ) : (
-          filteredThreads.map((thread) => {
+          sortedAndFilteredThreads.map((thread) => {
             const isSelected = selectedThreadIds.has(thread.id);
             const catInfo = CATEGORIES[thread.category];
             const isCategoryMenuOpen = activeCategoryMenuId === thread.id;
             const latest = thread.latestEmail;
+            const isCompact = displayDensity === 'compact';
 
             return (
               <div
                 key={thread.id}
                 id={`thread-row-${thread.id}`}
                 onClick={() => onSelectEmail(latest)}
-                className={`group flex items-center gap-2 px-2 py-3 text-xs transition cursor-pointer select-none border-l-2 relative sm:gap-3 sm:px-4 sm:py-2.5 ${
+                className={`group flex items-center gap-2 px-2 transition cursor-pointer select-none border-l-2 relative sm:gap-3 sm:px-4 ${
+                  isCompact ? 'py-1.5 text-xs' : 'py-2.5 sm:py-3 text-xs'
+                } ${
                   isSelected
                     ? isDark
                       ? 'bg-cyan-950/30 border-cyan-400 text-cyan-200'
@@ -915,21 +1176,36 @@ export const EmailList: React.FC<EmailListProps> = ({
                   </div>
                 )}
 
-                {/* Subject only (Aperçu épuré : Expéditeur + Objet uniquement) */}
-                <div className="flex-1 min-w-0 flex items-center truncate">
+                {/* Subject and Content Snippet (like Gmail) */}
+                <div className="flex-1 min-w-0 flex items-center gap-1.5 truncate text-xs sm:text-sm">
                   <span
-                    className={`truncate text-sm ${
+                    className={`shrink-0 max-w-[50%] sm:max-w-[42%] truncate ${
                       thread.isUnread
                         ? isDark
-                          ? 'font-semibold text-white'
-                          : 'font-semibold text-slate-900'
+                          ? 'font-bold text-white'
+                          : 'font-bold text-slate-900'
                         : isDark
-                        ? 'font-normal text-slate-300'
-                        : 'font-normal text-slate-700'
+                        ? 'font-medium text-slate-200'
+                        : 'font-medium text-slate-800'
                     }`}
                     title={thread.subject}
                   >
-                    {thread.subject}
+                    {thread.subject || '(Sans objet)'}
+                  </span>
+
+                  <span className="shrink-0 text-slate-400 dark:text-slate-600 select-none text-xs">
+                    –
+                  </span>
+
+                  <span
+                    className={`truncate text-xs ${
+                      isDark ? 'text-slate-400' : 'text-slate-500'
+                    }`}
+                    title={thread.latestEmail.snippet || thread.latestEmail.bodyText?.slice(0, 150)}
+                  >
+                    {thread.latestEmail.snippet ||
+                      thread.latestEmail.bodyText?.replace(/\s+/g, ' ').slice(0, 150) ||
+                      '(Aucun extrait)'}
                   </span>
                 </div>
 
@@ -966,12 +1242,14 @@ export const EmailList: React.FC<EmailListProps> = ({
                   <button
                     type="button"
                     onClick={(e) => onRequestTrash(latest, e)}
-                    className={`rounded p-1 transition ${
-                      isDark
+                    className={`rounded p-1 transition cursor-pointer ${
+                      selectedLabelId === 'TRASH'
+                        ? 'text-red-400 hover:bg-red-950/50 hover:text-red-300'
+                        : isDark
                         ? 'text-slate-400 hover:bg-red-950/40 hover:text-red-400'
                         : 'text-slate-500 hover:bg-red-50 hover:text-red-600'
                     }`}
-                    title="Déplacer dans la corbeille"
+                    title={selectedLabelId === 'TRASH' ? 'Supprimer définitivement' : 'Déplacer dans la corbeille'}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

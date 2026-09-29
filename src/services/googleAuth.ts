@@ -307,10 +307,44 @@ export function initUniversalAuth(
   onSuccess: (user: AuthenticatedUser, token: string) => void,
   onFailure: () => void
 ) {
-  // If we have cached token & user in session, immediately restore
+  // Check memory cache first
   if (cachedToken && cachedUser) {
     onSuccess(cachedUser, cachedToken);
     return () => {};
+  }
+
+  // Check persistent storage and multi-account storage
+  if (typeof window !== 'undefined') {
+    try {
+      const storedToken =
+        window.localStorage.getItem(TOKEN_STORAGE_KEY) ||
+        window.sessionStorage.getItem(TOKEN_STORAGE_KEY);
+      const storedUserStr =
+        window.localStorage.getItem(USER_STORAGE_KEY) ||
+        window.sessionStorage.getItem(USER_STORAGE_KEY);
+
+      if (storedToken && storedUserStr) {
+        const parsedUser: AuthenticatedUser = JSON.parse(storedUserStr);
+        cachedToken = storedToken;
+        cachedUser = parsedUser;
+        onSuccess(parsedUser, storedToken);
+        return () => {};
+      }
+
+      // Check stored accounts list
+      const storedAccounts = getStoredAccounts();
+      if (storedAccounts.length > 0) {
+        const active = storedAccounts[0];
+        if (active.token && active.user) {
+          cachedToken = active.token;
+          cachedUser = active.user;
+          onSuccess(active.user, active.token);
+          return () => {};
+        }
+      }
+    } catch {
+      // Storage parsing failed, proceed to Firebase listener
+    }
   }
 
   // Otherwise listen to Firebase Auth changes
@@ -322,12 +356,11 @@ export function initUniversalAuth(
         displayName: fbUser.displayName,
         photoURL: fbUser.photoURL,
       };
-      cachedToken = fbToken;
-      cachedUser = user;
+      setCachedUserAndToken(user, fbToken);
       onSuccess(user, fbToken);
     },
     () => {
-      // If we don't have session cache, call onFailure
+      // Only call onFailure if there is genuinely no cached session
       if (!cachedToken) {
         onFailure();
       }

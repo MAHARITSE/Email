@@ -1,6 +1,23 @@
 import { AgendaTask, TaskRecurrenceType } from '../types/agenda';
+import { ParsedEmail } from '../types/gmail';
+import { getActiveAccountEmail } from './multiAccountService';
+import { notifyAgendaEvent } from './notificationService';
+import { notifyIfAuthError } from './gmailApi';
 
-const AGENDA_STORAGE_KEY = 'gmail_agenda_tasks_v1';
+function getStorageKey(userEmail?: string): string {
+  const activeEmail = (userEmail || getActiveAccountEmail() || '').trim().toLowerCase();
+  if (activeEmail) {
+    return `gmail_agenda_v3_${activeEmail}`;
+  }
+  return 'gmail_agenda_v3_default';
+}
+
+// Purge legacy merged/shared agenda storage once on load
+if (typeof window !== 'undefined') {
+  try {
+    localStorage.removeItem('gmail_agenda_tasks_v1');
+  } catch {}
+}
 
 export const DAYS_OF_WEEK = [
   { value: 1, label: 'Lundi' },
@@ -91,29 +108,42 @@ const INITIAL_SEEDED_TASKS: AgendaTask[] = [
   },
 ];
 
-export function getAgendaTasks(): AgendaTask[] {
-  if (typeof window === 'undefined') return INITIAL_SEEDED_TASKS;
+export function getAgendaTasks(userEmail?: string): AgendaTask[] {
+  if (typeof window === 'undefined') return [];
+  const key = getStorageKey(userEmail);
   try {
-    const raw = localStorage.getItem(AGENDA_STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      localStorage.setItem(AGENDA_STORAGE_KEY, JSON.stringify(INITIAL_SEEDED_TASKS));
-      return INITIAL_SEEDED_TASKS;
+      // Clean slate per account - no shared or merged data!
+      localStorage.setItem(key, JSON.stringify([]));
+      return [];
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       return parsed;
     }
-    return INITIAL_SEEDED_TASKS;
   } catch (err) {
     console.error('Error reading agenda tasks:', err);
-    return INITIAL_SEEDED_TASKS;
+  }
+  return [];
+}
+
+export function clearAllAgendaTasksForAccount(userEmail?: string): void {
+  if (typeof window === 'undefined') return;
+  const key = getStorageKey(userEmail);
+  try {
+    localStorage.setItem(key, JSON.stringify([]));
+    window.dispatchEvent(new CustomEvent('gmail-agenda-updated'));
+  } catch (err) {
+    console.error('Error clearing agenda tasks:', err);
   }
 }
 
-function persistTasks(tasks: AgendaTask[]) {
+function persistTasks(tasks: AgendaTask[], userEmail?: string) {
   if (typeof window === 'undefined') return;
+  const key = getStorageKey(userEmail);
   try {
-    localStorage.setItem(AGENDA_STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(key, JSON.stringify(tasks));
     window.dispatchEvent(new CustomEvent('gmail-agenda-updated'));
   } catch (err) {
     console.error('Error persisting agenda tasks:', err);
@@ -121,9 +151,10 @@ function persistTasks(tasks: AgendaTask[]) {
 }
 
 export function saveAgendaTask(
-  taskData: Partial<AgendaTask> & { title: string; type: TaskRecurrenceType }
+  taskData: Partial<AgendaTask> & { title: string; type: TaskRecurrenceType },
+  userEmail?: string
 ): AgendaTask {
-  const current = getAgendaTasks();
+  const current = getAgendaTasks(userEmail);
   const now = Date.now();
 
   if (taskData.id) {
@@ -136,7 +167,7 @@ export function saveAgendaTask(
         updatedAt: now,
       };
       current[index] = updated;
-      persistTasks(current);
+      persistTasks(current, userEmail);
       return updated;
     }
   }
@@ -162,7 +193,7 @@ export function saveAgendaTask(
   };
 
   const next = [newTask, ...current];
-  persistTasks(next);
+  persistTasks(next, userEmail);
   return newTask;
 }
 
@@ -171,8 +202,12 @@ export function saveAgendaTask(
  * Note: A task is NEVER removed automatically when overdue.
  * It is only marked as finished when explicitly toggled here!
  */
-export function toggleTaskCompleted(taskId: string, forceStatus?: boolean): AgendaTask | null {
-  const current = getAgendaTasks();
+export function toggleTaskCompleted(
+  taskId: string,
+  forceStatus?: boolean,
+  userEmail?: string
+): AgendaTask | null {
+  const current = getAgendaTasks(userEmail);
   const index = current.findIndex((t) => t.id === taskId);
   if (index < 0) return null;
 
@@ -187,22 +222,22 @@ export function toggleTaskCompleted(taskId: string, forceStatus?: boolean): Agen
   };
 
   current[index] = updated;
-  persistTasks(current);
+  persistTasks(current, userEmail);
   return updated;
 }
 
-export function deleteAgendaTask(taskId: string): boolean {
-  const current = getAgendaTasks();
+export function deleteAgendaTask(taskId: string, userEmail?: string): boolean {
+  const current = getAgendaTasks(userEmail);
   const next = current.filter((t) => t.id !== taskId);
   if (next.length !== current.length) {
-    persistTasks(next);
+    persistTasks(next, userEmail);
     return true;
   }
   return false;
 }
 
-export function getPendingTasksCount(): number {
-  return getAgendaTasks().filter((t) => !t.isCompleted).length;
+export function getPendingTasksCount(userEmail?: string): number {
+  return getAgendaTasks(userEmail).filter((t) => !t.isCompleted).length;
 }
 
 /**
@@ -255,4 +290,251 @@ export function getTaskScheduleLabel(task: AgendaTask): string {
     default:
       return 'Tâche';
   }
+}
+
+/**
+ * Import Google Calendar events for a specific account via OAuth token
+ * and save them into persistent agenda tasks for that account.
+ */
+export async function importGoogleCalendarEvents(
+  token: string,
+  userEmail?: string
+): Promise<{ importedCount: number; errors?: string }> {
+  if (!token) return { importedCount: 0, errors: 'Aucun jeton d\'accès fourni' };
+
+  try {
+    const timeMin = new Date(Date.now() - 7 * 86400000).toISOString();
+    const timeMax = new Date(Date.now() + 60 * 86400000).toISOString();
+
+    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(
+      timeMin
+    )}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=250`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) {
+        notifyIfAuthError(res.status, 'Jeton expiré ou permission Google Calendar non accordée.');
+        return {
+          importedCount: 0,
+          errors: 'Jeton expiré ou permission Google Calendar non accordée. Veuillez vous reconnecter à Google.',
+        };
+      }
+      return { importedCount: 0, errors: `Erreur Google Calendar (${res.status}): ${res.statusText}` };
+    }
+
+    const data = await res.json();
+    const items = data.items || [];
+    const currentTasks = getAgendaTasks(userEmail);
+    const now = Date.now();
+    let newCount = 0;
+
+    for (const item of items) {
+      if (!item.id || item.status === 'cancelled') continue;
+
+      const gcalId = `gcal_${item.id}`;
+      const startDateTime = item.start?.dateTime || item.start?.date;
+      if (!startDateTime) continue;
+
+      let dueDate = '';
+      let dueTime = '09:00';
+
+      if (startDateTime.includes('T')) {
+        const parts = startDateTime.split('T');
+        dueDate = parts[0];
+        dueTime = parts[1].substring(0, 5);
+      } else {
+        dueDate = startDateTime;
+      }
+
+      const existingIndex = currentTasks.findIndex((t) => t.id === gcalId);
+      const summaryTitle = item.summary ? item.summary.trim() : 'Événement Google Calendar';
+
+      const taskObj: AgendaTask = {
+        id: gcalId,
+        title: summaryTitle,
+        description: (item.location ? `Lieu : ${item.location}\n` : '') + (item.description || ''),
+        type: 'programme',
+        dueDate,
+        dueTime,
+        priority: 'normale',
+        category: 'Google Calendar',
+        isCompleted: false,
+        createdAt: existingIndex >= 0 ? currentTasks[existingIndex].createdAt : now,
+        updatedAt: now,
+      };
+
+      if (existingIndex >= 0) {
+        currentTasks[existingIndex] = {
+          ...currentTasks[existingIndex],
+          ...taskObj,
+          isCompleted: currentTasks[existingIndex].isCompleted,
+        };
+      } else {
+        currentTasks.unshift(taskObj);
+        newCount++;
+      }
+    }
+
+    persistTasks(currentTasks, userEmail);
+    return { importedCount: newCount };
+  } catch (err: any) {
+    console.error('Error importing Google Calendar events:', err);
+    return { importedCount: 0, errors: err?.message || 'Échec de l\'import Google Calendar' };
+  }
+}
+
+/**
+ * Automatically scan parsed emails for calendar invites and save them to agenda
+ */
+export function importEmailCalendarInvites(emails: ParsedEmail[], userEmail?: string): number {
+  if (!emails || emails.length === 0) return 0;
+  const currentTasks = getAgendaTasks(userEmail);
+  const existingIds = new Set(currentTasks.map((t) => t.linkedEmailId || t.id));
+  const now = Date.now();
+  let addedCount = 0;
+
+  emails.forEach((em) => {
+    if (existingIds.has(em.id)) return;
+
+    const subject = (em.subject || '').toLowerCase();
+    const isInvite =
+      subject.includes('invitation') ||
+      subject.includes('réunion') ||
+      subject.includes('rendez-vous') ||
+      subject.includes('rdv') ||
+      subject.includes('webinar') ||
+      subject.includes('convocation') ||
+      subject.includes('meeting') ||
+      em.attachments?.some((att) => att.filename.endsWith('.ics'));
+
+    if (isInvite) {
+      // Calculate due date (default to email date + 1 day if not explicit)
+      const emailDate = new Date(Number(em.internalDate) || Date.now());
+      const dueDateObj = new Date(emailDate.getTime() + 86400000);
+      const dueDate = dueDateObj.toISOString().split('T')[0];
+
+      const newTask: AgendaTask = {
+        id: `email_invite_${em.id}`,
+        title: em.subject || 'Rendez-vous depuis e-mail',
+        description: `Invitations / RDV reçu de ${em.fromName || em.fromEmail}\n\n${(em.snippet || em.bodyText || '').slice(0, 150)}`,
+        type: 'programme',
+        dueDate,
+        dueTime: '09:00',
+        priority: 'haute',
+        category: 'Invitation Mail',
+        isCompleted: false,
+        createdAt: now,
+        updatedAt: now,
+        linkedEmailId: em.id,
+        linkedEmailSubject: em.subject,
+      };
+
+      currentTasks.unshift(newTask);
+      existingIds.add(em.id);
+      addedCount++;
+    }
+  });
+
+  if (addedCount > 0) {
+    persistTasks(currentTasks, userEmail);
+  }
+  return addedCount;
+}
+
+/**
+ * Core Agenda Notification Engine:
+ * - Checks tasks 2 days in advance (Day -2, Day -1, Day 0)
+ * - Fires notifications 2 times per day: at 09:00 (9h) and 16:00 (16h)
+ */
+export function checkAndNotifyAgendaTasks(userEmail?: string): { notifiedCount: number } {
+  if (typeof window === 'undefined') return { notifiedCount: 0 };
+
+  const tasks = getAgendaTasks(userEmail);
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+  const currentHour = now.getHours();
+  let notifiedCount = 0;
+
+  // Identify active time slots (9h and/or 16h)
+  const activeSlots: ('09:00' | '16:00')[] = [];
+  if (currentHour >= 8 && currentHour < 14) {
+    activeSlots.push('09:00');
+  }
+  if (currentHour >= 15 && currentHour < 21) {
+    activeSlots.push('16:00');
+  }
+  // Fallback if checked outside exact window
+  if (activeSlots.length === 0) {
+    if (currentHour < 14) activeSlots.push('09:00');
+    else activeSlots.push('16:00');
+  }
+
+  tasks.forEach((task) => {
+    if (task.isCompleted) return;
+
+    let targetDateStr = task.dueDate;
+
+    if (!targetDateStr) {
+      if (task.type === 'hebdomadaire' && task.dayOfWeek !== undefined) {
+        const taskDay = task.dayOfWeek;
+        const currentDay = now.getDay();
+        let daysUntil = (taskDay - currentDay + 7) % 7;
+        const targetDate = new Date(now.getTime() + daysUntil * 86400000);
+        targetDateStr = targetDate.toISOString().split('T')[0];
+      } else if (task.type === 'mensuel' && task.dayOfMonth !== undefined) {
+        const targetDate = new Date(now.getFullYear(), now.getMonth(), task.dayOfMonth);
+        if (targetDate.getTime() < now.getTime() - 86400000) {
+          targetDate.setMonth(targetDate.getMonth() + 1);
+        }
+        targetDateStr = targetDate.toISOString().split('T')[0];
+      }
+    }
+
+    if (!targetDateStr) return;
+
+    try {
+      const taskDate = new Date(`${targetDateStr}T00:00:00`);
+      const todayDate = new Date(`${todayStr}T00:00:00`);
+
+      const diffMs = taskDate.getTime() - todayDate.getTime();
+      const diffDays = Math.round(diffMs / 86400000);
+
+      // Notify if within 2 days (Day -2, Day -1, Day 0)
+      if (diffDays >= 0 && diffDays <= 2) {
+        activeSlots.forEach((slot) => {
+          const trackerKey = `gmail_agenda_notif_${task.id}_${todayStr}_${slot}`;
+          const alreadyNotified = localStorage.getItem(trackerKey);
+
+          if (!alreadyNotified) {
+            localStorage.setItem(trackerKey, 'true');
+            notifiedCount++;
+
+            const advanceText =
+              diffDays === 0
+                ? "Aujourd'hui"
+                : diffDays === 1
+                ? 'Demain (dans 1 jour)'
+                : 'Rappel 2 jours en avance';
+
+            const slotText = slot === '09:00' ? 'Rappel de 09:00' : 'Rappel de 16:00';
+
+            notifyAgendaEvent({
+              title: task.title,
+              advanceText,
+              time: task.dueTime || '09:00',
+              description: task.description,
+              slotText,
+            });
+          }
+        });
+      }
+    } catch (err) {
+      console.error('Error evaluating agenda task notification:', err);
+    }
+  });
+
+  return { notifiedCount };
 }

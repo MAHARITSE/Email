@@ -14,6 +14,7 @@ import {
   Users,
   FileSignature,
   CalendarDays,
+  LogOut,
 } from 'lucide-react';
 import { GmailLabel } from '../types/gmail';
 import { useTheme } from '../context/ThemeContext';
@@ -36,6 +37,7 @@ interface SidebarProps {
   signaturesCount?: number;
   onOpenAgenda?: () => void;
   agendaCount?: number;
+  onSignOut?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -55,39 +57,47 @@ export const Sidebar: React.FC<SidebarProps> = ({
   signaturesCount = 0,
   onOpenAgenda,
   agendaCount = 0,
+  onSignOut,
 }) => {
   const { isDark } = useTheme();
   const [showCustomLabels, setShowCustomLabels] = React.useState(true);
 
-  // Helper to extract unread count for any folder label (prioritizing threadsUnread for exact Gmail count parity)
-  const getFolderUnread = (id: string, fallback = 0): number => {
+  // Helper to extract count for any folder label (prioritizing threadsUnread for exact Gmail count parity)
+  const getFolderCount = (id: string, fallback = 0): number => {
     const found = labels.find((l) => l.id.toUpperCase() === id.toUpperCase());
     if (!found) return fallback;
+
+    if (id === 'SPAM' || id === 'TRASH' || id === 'DRAFT') {
+      const total = typeof found.threadsTotal === 'number' ? found.threadsTotal : (found.messagesTotal || 0);
+      const unread = typeof found.threadsUnread === 'number' ? found.threadsUnread : (found.messagesUnread || 0);
+      return Math.max(0, Math.max(total, unread));
+    }
+
     if (typeof found.threadsUnread === 'number') {
-      return found.threadsUnread;
+      return Math.max(0, found.threadsUnread);
     }
     if (typeof found.messagesUnread === 'number') {
-      return found.messagesUnread;
+      return Math.max(0, found.messagesUnread);
     }
-    return fallback;
+    return Math.max(0, fallback);
   };
 
-  const inboxUnread = getFolderUnread('INBOX', unreadCount);
-  const starredUnread = getFolderUnread('STARRED', 0);
-  const sentUnread = getFolderUnread('SENT', 0);
-  const draftUnread = getFolderUnread('DRAFT', labels.find((l) => l.id === 'DRAFT')?.threadsTotal || labels.find((l) => l.id === 'DRAFT')?.messagesTotal || 0);
-  const spamUnread = getFolderUnread('SPAM', 0);
-  const trashUnread = getFolderUnread('TRASH', 0);
+  const inboxUnread = getFolderCount('INBOX', unreadCount);
+  const starredUnread = getFolderCount('STARRED', 0);
+  const sentUnread = getFolderCount('SENT', 0);
+  const draftCount = getFolderCount('DRAFT', 0);
+  const spamCount = getFolderCount('SPAM', 0);
+  const trashCount = getFolderCount('TRASH', 0);
 
-  // System items with their respective unread message counts
+  // System items with their respective message counts
   const systemNav = [
     { id: 'INBOX', name: 'Boîte de réception', icon: Inbox, count: inboxUnread },
     { id: 'ATTACHMENTS', name: 'Pièces jointes', icon: Paperclip, count: 0 },
     { id: 'STARRED', name: 'Messages suivis', icon: Star, count: starredUnread },
     { id: 'SENT', name: 'Messages envoyés', icon: Send, count: sentUnread },
-    { id: 'DRAFT', name: 'Brouillons', icon: FileText, count: draftUnread },
-    { id: 'SPAM', name: 'Spam', icon: AlertOctagon, count: spamUnread },
-    { id: 'TRASH', name: 'Corbeille', icon: Trash2, count: trashUnread },
+    { id: 'DRAFT', name: 'Brouillons', icon: FileText, count: draftCount },
+    { id: 'SPAM', name: 'Spam', icon: AlertOctagon, count: spamCount },
+    { id: 'TRASH', name: 'Corbeille', icon: Trash2, count: trashCount },
   ];
 
   // User custom labels
@@ -277,8 +287,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Connection Status Badge */}
-      <div className="p-3">
+      {/* Connection Status Badge & Sign Out */}
+      <div className="p-3 space-y-2">
         <div className={`p-3 rounded-xl border ${
           isDark
             ? 'bg-cyan-950/20 border-cyan-800/40'
@@ -294,6 +304,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Assistant IA Gemini & synchronisation Gmail opérationnels.
           </p>
         </div>
+
+        {onSignOut && (
+          <button
+            type="button"
+            id="sidebar-sign-out-btn"
+            onClick={() => {
+              onCloseMobile();
+              onSignOut();
+            }}
+            className={`w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl border text-xs font-mono font-medium transition cursor-pointer ${
+              isDark
+                ? 'bg-slate-900/50 border-slate-800/80 text-slate-400 hover:text-red-400 hover:border-red-900/50 hover:bg-red-950/20'
+                : 'bg-white border-slate-200 text-slate-600 hover:text-red-600 hover:border-red-200 hover:bg-red-50'
+            }`}
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span>Déconnexion</span>
+          </button>
+        )}
       </div>
     </div>
   );

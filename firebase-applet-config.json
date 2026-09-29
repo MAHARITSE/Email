@@ -1,12 +1,11 @@
 {
   "projectId": "automated-palisade-hmbw7",
-  "appId": "1:158417254066:web:82a9780584522b82f2fbab",
+  "appId": "1:158417254066:web:796d94dba9418db1f2fbab",
   "apiKey": "AIzaSyATEl8LEF8oaQ3eL1bpCI-KEfCyZ6YA4VY",
   "authDomain": "automated-palisade-hmbw7.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-email-f01dee1b-fd96-4f6e-a3c0-8c5551d5bb32",
   "storageBucket": "automated-palisade-hmbw7.firebasestorage.app",
   "messagingSenderId": "158417254066",
   "measurementId": "",
-  "oAuthClientId": "211708420086-4ip8gkhlccd2nk8e1npv2snr4t1gv2db.apps.googleusercontent.com",
+  "oAuthClientId": "158417254066-tkvb7m30urujgqsebdf024gp5u76limh.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

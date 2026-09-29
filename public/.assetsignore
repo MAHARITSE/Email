@@ -1,6 +1,0 @@
-# Files that must not be uploaded as public static assets.
-# Kept in public/ so Vite copies it into dist/ (.assetsignore must live
-# in the root of the assets directory).
-server.cjs
-server.cjs.map
-_routes.json

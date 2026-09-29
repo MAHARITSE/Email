@@ -51,6 +51,7 @@ export interface EmailAttachment {
   fromName: string;
   fromEmail: string;
   data?: string;
+  isInline?: boolean;
 }
 
 export interface ParsedEmail {

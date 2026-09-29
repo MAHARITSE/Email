@@ -348,20 +348,20 @@ export const SignatureSettingsModal: React.FC<SignatureSettingsModalProps> = ({
       >
         {/* Header */}
         <div
-          className={`flex items-center justify-between px-6 py-4 border-b shrink-0 ${
+          className={`flex items-center justify-between px-3 sm:px-6 py-2.5 sm:py-4 border-b shrink-0 gap-2 ${
             isDark ? 'border-slate-800 bg-[#0E131F]' : 'border-slate-200 bg-slate-50'
           }`}
         >
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-[0_0_12px_rgba(34,211,238,0.2)]">
-              <FileSignature className="h-5 w-5" />
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="p-2 sm:p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-[0_0_12px_rgba(34,211,238,0.2)] shrink-0">
+              <FileSignature className="h-4 w-4 sm:h-5 sm:w-5" />
             </div>
-            <div>
-              <h2 className="text-base font-bold tracking-wide flex items-center gap-2">
-                Éditeur &amp; Gestionnaire de Signatures d'e-mails
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm sm:text-base font-bold tracking-wide truncate">
+                Signatures d'e-mails
               </h2>
-              <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Champ libre complet avec polices personnalisées, couleurs, logos, images et mise en page WYSIWYG
+              <p className={`hidden sm:block text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'} truncate`}>
+                Champ libre complet avec polices personnalisées, couleurs, logos et mise en page WYSIWYG
               </p>
             </div>
           </div>
@@ -369,12 +369,15 @@ export const SignatureSettingsModal: React.FC<SignatureSettingsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className={`p-2 rounded-lg transition ${
-              isDark ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500 hover:text-black'
+            className={`p-1.5 sm:p-2 rounded-xl border transition cursor-pointer flex items-center justify-center shrink-0 ${
+              isDark
+                ? 'border-slate-700 bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white'
+                : 'border-slate-300 bg-white hover:bg-slate-100 text-slate-700 hover:text-black shadow-xs'
             }`}
             title="Fermer"
+            aria-label="Fermer la fenêtre de configuration des signatures"
           >
-            <X className="h-5 w-5" />
+            <X className="h-5 w-5 text-cyan-400 sm:text-inherit" />
           </button>
         </div>
 

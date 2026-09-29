@@ -123,6 +123,94 @@ body.light ::-webkit-scrollbar-thumb:hover {
   overflow-x: auto;
 }
 
+/* Dark Mode HTML Email Body & Quoted History Normalization - Black Background & Pure White Text */
+body.dark .email-body-content.email-clean-mode,
+.dark .email-body-content.email-clean-mode,
+body.dark .email-body-content,
+.dark .email-body-content {
+  color: #ffffff !important;
+}
+
+body.dark .email-body-content.email-clean-mode *,
+.dark .email-body-content.email-clean-mode *,
+body.dark .email-body-content *,
+.dark .email-body-content * {
+  background-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Ensure ALL font tags, spans, p, div, td, th, headers, blockquotes in dark mode are pure white text */
+body.dark .email-body-content font,
+body.dark .email-body-content span,
+body.dark .email-body-content p,
+body.dark .email-body-content div,
+body.dark .email-body-content td,
+body.dark .email-body-content th,
+body.dark .email-body-content b,
+body.dark .email-body-content strong,
+body.dark .email-body-content i,
+body.dark .email-body-content em,
+body.dark .email-body-content blockquote,
+body.dark .email-body-content header,
+body.dark .email-body-content small {
+  color: #ffffff !important;
+  background-color: transparent !important;
+}
+
+/* Overwrite hardcoded dark inline styles from corporate emails */
+body.dark .email-body-content [style*="color"],
+body.dark .email-body-content [color] {
+  color: #ffffff !important;
+}
+
+/* Maintain bright cyan/blue highlights for links in dark mode */
+body.dark .email-body-content a,
+body.dark .email-body-content a * {
+  color: #38bdf8 !important;
+  text-decoration: underline !important;
+}
+
+/* Ensure all email images display fully and natively */
+.email-body-content img {
+  max-width: 100% !important;
+  height: auto !important;
+  display: inline-block !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+/* Paper mode styling overrides for pristine document look - exact match for corporate emails & signatures */
+.email-paper-mode {
+  color: #0f172a !important;
+  background-color: #ffffff !important;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+.email-paper-mode p,
+.email-paper-mode div,
+.email-paper-mode span,
+.email-paper-mode font,
+.email-paper-mode td,
+.email-paper-mode th {
+  background-color: transparent !important;
+}
+
+.email-paper-mode img {
+  max-width: 100% !important;
+  height: auto !important;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.email-paper-mode a,
+.email-paper-mode a * {
+  color: #0284c7 !important;
+  text-decoration: underline !important;
+}
+
 .rich-email-content[contenteditable]:empty::before {
   content: attr(data-placeholder);
   color: #64748b;

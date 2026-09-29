@@ -26,8 +26,11 @@ import {
   saveAgendaTask,
   toggleTaskCompleted,
   deleteAgendaTask,
+  clearAllAgendaTasksForAccount,
   isTaskOverdue,
   getTaskScheduleLabel,
+  importGoogleCalendarEvents,
+  checkAndNotifyAgendaTasks,
   DAYS_OF_WEEK,
   TASK_TYPES,
 } from '../services/agendaService';
@@ -36,18 +39,63 @@ import { useTheme } from '../context/ThemeContext';
 interface AgendaViewProps {
   onBackToMailbox?: () => void;
   initialNewTaskData?: Partial<AgendaTask>;
+  currentUserEmail?: string;
+  accessToken?: string;
 }
 
 export const AgendaView: React.FC<AgendaViewProps> = ({
   onBackToMailbox,
   initialNewTaskData,
+  currentUserEmail,
+  accessToken,
 }) => {
   const { isDark } = useTheme();
-  const [tasks, setTasks] = useState<AgendaTask[]>(() => getAgendaTasks());
+  const [tasks, setTasks] = useState<AgendaTask[]>(() => getAgendaTasks(currentUserEmail));
   const [statusFilter, setStatusFilter] = useState<'pending' | 'all' | 'completed'>('pending');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSyncingCalendar, setIsSyncingCalendar] = useState(false);
+
+  // Re-sync tasks when currentUserEmail changes & check notifications
+  useEffect(() => {
+    setTasks(getAgendaTasks(currentUserEmail));
+    checkAndNotifyAgendaTasks(currentUserEmail);
+  }, [currentUserEmail]);
+
+  // Auto-import Google Calendar events when opening view with valid token
+  useEffect(() => {
+    if (accessToken) {
+      importGoogleCalendarEvents(accessToken, currentUserEmail).then((res) => {
+        if (res.importedCount > 0) {
+          setTasks(getAgendaTasks(currentUserEmail));
+        }
+      });
+    }
+  }, [accessToken, currentUserEmail]);
+
+  const handleSyncGoogleCalendar = async () => {
+    if (!accessToken) {
+      showToast('⚠️ Aucun jeton d\'accès Google actif.');
+      return;
+    }
+    setIsSyncingCalendar(true);
+    try {
+      const res = await importGoogleCalendarEvents(accessToken, currentUserEmail);
+      setTasks(getAgendaTasks(currentUserEmail));
+      if (res.importedCount > 0) {
+        showToast(`✅ ${res.importedCount} événement(s) Google Calendar importé(s)`);
+      } else if (res.errors) {
+        showToast(`⚠️ ${res.errors}`);
+      } else {
+        showToast(' Agenda Google à jour (aucun nouvel événement)');
+      }
+    } catch {
+      showToast('⚠️ Échec de la synchronisation Google Calendar');
+    } finally {
+      setIsSyncingCalendar(false);
+    }
+  };
 
   // Modal for Create/Edit Task
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -76,11 +124,11 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
   // Sync when tasks are updated anywhere
   useEffect(() => {
     const handleUpdate = () => {
-      setTasks(getAgendaTasks());
+      setTasks(getAgendaTasks(currentUserEmail));
     };
     window.addEventListener('gmail-agenda-updated', handleUpdate);
     return () => window.removeEventListener('gmail-agenda-updated', handleUpdate);
-  }, []);
+  }, [currentUserEmail]);
 
   // Handle open with initial data if passed
   useEffect(() => {
@@ -125,28 +173,31 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
     e.preventDefault();
     if (!formTitle.trim()) return;
 
-    saveAgendaTask({
-      id: editingTask ? editingTask.id : undefined,
-      title: formTitle.trim(),
-      description: formDescription.trim(),
-      type: formType,
-      dueDate: formType === 'programme' ? formDueDate : undefined,
-      dueTime: formDueTime,
-      dayOfWeek: formType === 'hebdomadaire' ? formDayOfWeek : undefined,
-      dayOfMonth: formType === 'mensuel' || formType === 'trimestriel' ? formDayOfMonth : undefined,
-      monthOfQuarter: formType === 'trimestriel' ? formMonthOfQuarter : undefined,
-      priority: formPriority,
-      category: formCategory.trim() || 'Travail',
-      linkedEmailId: editingTask?.linkedEmailId,
-      linkedEmailSubject: editingTask?.linkedEmailSubject,
-    });
+    saveAgendaTask(
+      {
+        id: editingTask ? editingTask.id : undefined,
+        title: formTitle.trim(),
+        description: formDescription.trim(),
+        type: formType,
+        dueDate: formType === 'programme' ? formDueDate : undefined,
+        dueTime: formDueTime,
+        dayOfWeek: formType === 'hebdomadaire' ? formDayOfWeek : undefined,
+        dayOfMonth: formType === 'mensuel' || formType === 'trimestriel' ? formDayOfMonth : undefined,
+        monthOfQuarter: formType === 'trimestriel' ? formMonthOfQuarter : undefined,
+        priority: formPriority,
+        category: formCategory.trim() || 'Travail',
+        linkedEmailId: editingTask?.linkedEmailId,
+        linkedEmailSubject: editingTask?.linkedEmailSubject,
+      },
+      currentUserEmail
+    );
 
     setIsModalOpen(false);
     showToast(editingTask ? 'Tâche mise à jour avec succès' : 'Nouvelle tâche ajoutée à votre agenda');
   };
 
   const handleToggle = (task: AgendaTask) => {
-    const updated = toggleTaskCompleted(task.id);
+    const updated = toggleTaskCompleted(task.id, undefined, currentUserEmail);
     if (updated) {
       if (updated.isCompleted) {
         showToast(`Tâche « ${updated.title.substring(0, 30)}... » cochée comme terminée`);
@@ -158,8 +209,16 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
 
   const handleDelete = (task: AgendaTask) => {
     if (window.confirm(`Confirmez-vous la suppression de la tâche « ${task.title} » ?`)) {
-      deleteAgendaTask(task.id);
+      deleteAgendaTask(task.id, currentUserEmail);
       showToast('Tâche supprimée');
+    }
+  };
+
+  const handleClearAccountTasks = () => {
+    if (window.confirm(`Voulez-vous réinitialiser et vider toutes les tâches de l'agenda pour ce compte (${currentUserEmail || 'en cours'}) ?`)) {
+      clearAllAgendaTasksForAccount(currentUserEmail);
+      setTasks([]);
+      showToast('Agenda de ce compte réinitialisé');
     }
   };
 
@@ -294,13 +353,13 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
   return (
     <div
       id="agenda-main-view"
-      className={`flex h-full flex-col overflow-hidden transition-colors ${
+      className={`flex h-full flex-col overflow-hidden transition-colors min-h-0 w-full ${
         isDark ? 'bg-[#05070A] text-slate-200' : 'bg-slate-50 text-slate-800'
       }`}
     >
       {/* Toast notification */}
       {toastMessage && (
-        <div className="fixed top-20 right-6 z-50 rounded-xl px-4 py-2.5 text-xs font-mono font-medium shadow-2xl bg-cyan-600 text-white animate-in slide-in-from-top duration-200 flex items-center gap-2">
+        <div className="fixed top-16 right-4 sm:right-6 z-50 rounded-xl px-4 py-2.5 text-xs font-mono font-medium shadow-2xl bg-cyan-600 text-white animate-in slide-in-from-top duration-200 flex items-center gap-2">
           <Check className="h-4 w-4" />
           <span>{toastMessage}</span>
         </div>
@@ -308,21 +367,21 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
 
       {/* Header Bar */}
       <div
-        className={`flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b shrink-0 ${
+        className={`flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6 py-2.5 sm:py-4 border-b shrink-0 ${
           isDark ? 'border-slate-800 bg-[#080B10]' : 'border-slate-200 bg-white'
         }`}
       >
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white shadow-md">
-            <CalendarDays className="h-5 w-5" />
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+          <div className="p-1.5 sm:p-2 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-600 text-white shadow-md shrink-0">
+            <CalendarDays className="h-4 w-4 sm:h-5 sm:w-5" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base sm:text-lg font-bold font-mono tracking-wide">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+              <h1 className="text-sm sm:text-lg font-bold font-mono tracking-wide truncate">
                 Agenda & Tâches
               </h1>
               <span
-                className={`text-[11px] font-mono px-2 py-0.5 rounded-full border ${
+                className={`text-[10px] sm:text-[11px] font-mono px-2 py-0.2 rounded-full border shrink-0 ${
                   isDark
                     ? 'bg-cyan-950/60 border-cyan-800/80 text-cyan-300'
                     : 'bg-cyan-100 border-cyan-300 text-cyan-900'
@@ -330,25 +389,48 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
               >
                 {stats.pendingCount} à faire
               </span>
+              {currentUserEmail && (
+                <span className={`hidden md:inline text-[10px] sm:text-[11px] font-mono px-2 py-0.2 rounded-md border ${
+                  isDark ? 'bg-slate-900 border-slate-700 text-cyan-400' : 'bg-slate-100 border-slate-300 text-cyan-800'
+                }`}>
+                  Compte : {currentUserEmail}
+                </span>
+              )}
             </div>
-            <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              Gestionnaire de tâches récurrentes (hebdo, mensuel, trimestriel) et programmées
+            <p className={`hidden sm:block text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              Gestionnaire de tâches récurrentes et programmées propre à {currentUserEmail || 'votre compte'}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleSyncGoogleCalendar}
+            disabled={isSyncingCalendar}
+            title="Importer les événements de votre Google Calendar"
+            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-mono font-medium border transition cursor-pointer ${
+              isDark
+                ? 'bg-slate-900 border-cyan-800/80 hover:bg-slate-800 text-cyan-300'
+                : 'bg-cyan-50 border-cyan-300 hover:bg-cyan-100 text-cyan-900'
+            }`}
+          >
+            <CalendarClock className={`h-3.5 w-3.5 ${isSyncingCalendar ? 'animate-spin text-cyan-400' : ''}`} />
+            <span className="hidden sm:inline">{isSyncingCalendar ? 'Importation...' : 'Importer Google Calendar'}</span>
+            <span className="sm:hidden">Calendar</span>
+          </button>
+
           {onBackToMailbox && (
             <button
               type="button"
               onClick={onBackToMailbox}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer ${
+              className={`px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg text-xs font-medium border transition cursor-pointer ${
                 isDark
                   ? 'border-slate-700 hover:bg-slate-800 text-slate-300'
                   : 'border-slate-300 hover:bg-slate-100 text-slate-700'
               }`}
             >
-              Retour à la boîte
+              Retour
             </button>
           )}
 
@@ -356,17 +438,18 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
             type="button"
             id="agenda-create-task-btn"
             onClick={() => openCreateModal()}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition active:scale-95 shadow-md cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition active:scale-95 shadow-md cursor-pointer"
           >
             <Plus className="h-4 w-4" />
-            <span>Nouvelle tâche</span>
+            <span className="hidden sm:inline">Nouvelle tâche</span>
+            <span className="sm:hidden">Créer</span>
           </button>
         </div>
       </div>
 
-      {/* Persistence Guarantee Banner */}
+      {/* Persistence & 2-day / 2x-daily Notifications Banner */}
       <div
-        className={`px-6 py-2.5 border-b flex items-center justify-between gap-3 text-xs shrink-0 ${
+        className={`px-3 sm:px-6 py-2 border-b flex flex-wrap items-center justify-between gap-2 text-xs shrink-0 ${
           isDark
             ? 'bg-[#0A101D] border-cyan-900/40 text-cyan-300/90'
             : 'bg-cyan-50/80 border-cyan-200 text-cyan-900'
@@ -375,7 +458,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
         <div className="flex items-center gap-2">
           <Info className="h-4 w-4 text-cyan-400 shrink-0" />
           <span className="leading-snug">
-            <strong>Règle de conservation :</strong> Les tâches restent <strong>toujours actives et visibles</strong> dans votre liste tant que vous n'avez pas expressément coché qu'elles sont finies.
+            <strong>Rappels Agenda :</strong> Notifié <strong>2 jours en avance</strong> et <strong>2 fois par jour (à 09h00 et 16h00)</strong>. Vos tâches restent enregistrées et conservées sans déconnexion.
           </span>
         </div>
         {stats.overdueCount > 0 && (
@@ -385,9 +468,9 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
         )}
       </div>
 
-      {/* Filters & Tabs Strip */}
+      {/* Filters & Tabs Strip - Horizontal scroll on mobile */}
       <div
-        className={`px-6 py-3 border-b flex flex-wrap items-center justify-between gap-3 shrink-0 ${
+        className={`px-3 sm:px-6 py-2 sm:py-3 border-b flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0 touch-pan-x ${
           isDark ? 'border-slate-800 bg-[#070A0F]' : 'border-slate-200 bg-white'
         }`}
       >
@@ -521,7 +604,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({
       </div>
 
       {/* Task List Content */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3">
+      <div className="flex-1 overflow-y-auto min-h-0 p-3 sm:p-6 space-y-2.5 sm:space-y-3">
         {filteredTasks.length === 0 ? (
           <div
             className={`flex flex-col items-center justify-center p-12 text-center rounded-2xl border ${

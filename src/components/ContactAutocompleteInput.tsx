@@ -11,6 +11,7 @@ interface ContactAutocompleteInputProps {
   className?: string;
   required?: boolean;
   autoFocus?: boolean;
+  currentUserEmail?: string;
 }
 
 export const ContactAutocompleteInput: React.FC<ContactAutocompleteInputProps> = ({
@@ -21,6 +22,7 @@ export const ContactAutocompleteInput: React.FC<ContactAutocompleteInputProps> =
   className,
   required,
   autoFocus,
+  currentUserEmail,
 }) => {
   const { isDark } = useTheme();
   const [suggestions, setSuggestions] = useState<LocalContact[]>([]);
@@ -37,7 +39,7 @@ export const ContactAutocompleteInput: React.FC<ContactAutocompleteInputProps> =
     const currentQuery = tokens[tokens.length - 1].trim();
 
     if (currentQuery.length > 0) {
-      const results = suggestContacts(currentQuery, 6);
+      const results = suggestContacts(currentQuery, 6, currentUserEmail);
       setSuggestions(results);
       setIsOpen(results.length > 0);
       setHighlightedIndex(results.length > 0 ? 0 : -1);
@@ -46,7 +48,7 @@ export const ContactAutocompleteInput: React.FC<ContactAutocompleteInputProps> =
       setIsOpen(false);
       setHighlightedIndex(-1);
     }
-  }, [value]);
+  }, [value, currentUserEmail]);
 
   // Click outside to close
   useEffect(() => {
@@ -65,7 +67,7 @@ export const ContactAutocompleteInput: React.FC<ContactAutocompleteInputProps> =
     const prefix = tokens.length > 0 ? tokens.join(', ').trim() + ', ' : '';
     const formatted = `${contact.name} <${contact.email}>`;
     onChange(prefix ? `${prefix}${formatted}` : formatted);
-    incrementContactUsage(contact.email);
+    incrementContactUsage(contact.email, currentUserEmail);
     setIsOpen(false);
     inputRef.current?.focus();
   };
@@ -80,11 +82,14 @@ export const ContactAutocompleteInput: React.FC<ContactAutocompleteInputProps> =
     const name = match ? match[1] : current.split('@')[0];
     const email = match ? match[2] : current;
 
-    saveLocalContact({
-      name,
-      email,
-      category: email.endsWith('gmail.com') || email.endsWith('outlook.com') ? 'personal' : 'pro',
-    });
+    saveLocalContact(
+      {
+        name,
+        email,
+        category: email.endsWith('gmail.com') || email.endsWith('outlook.com') ? 'personal' : 'pro',
+      },
+      currentUserEmail
+    );
     setQuickSaved(true);
     setTimeout(() => setQuickSaved(false), 3000);
     setIsOpen(false);

@@ -44,14 +44,7 @@ async function generateGeminiWithFallbackAndRetry(
   contents: string,
   config?: any
 ) {
-  // Use real, available models. 3.8-flash doesn't exist - map to 2.0/1.5 flash
-  const candidateModels = [
-    'gemini-2.0-flash',
-    'gemini-1.5-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-flash-latest',
-    'gemini-1.5-flash-8b',
-  ];
+  const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
   let lastError: any = null;
 
   for (const model of candidateModels) {
@@ -321,6 +314,11 @@ app.post('/api/ai/suggest-reply', async (req, res) => {
     const prompt = `Tu es un assistant rédaction d'e-mails IA haute performance (WriteMail.ai style).
 Analyse le courriel ci-dessous et propose 3 suggestions de réponses intelligentes synthétiques prêtes à envoyer.
 
+RÈGLE FONDAMENTALE ABSOLUE :
+Tu rédiges les réponses DU POINT DE VUE DE L'UTILISATEUR (qui a reçu ce courriel) S'ADRESSANT À L'EXPÉDITEUR CI-DESSOUS (${sender || 'l\'expéditeur'}).
+Les réponses doivent TOUJOURS s'adresser à ${sender || 'l\'expéditeur'} (ex: "Bonjour ${sender ? sender.split(' ')[0] : ''}, merci pour votre retour...").
+Ne réponds JAMAIS à l'utilisateur lui-même et n'usurpe pas l'identité de l'expéditeur.
+
 Langue obligatoire des réponses : ${targetLang}
 Ton général souhaité : ${tone || 'professionnel'}
 
@@ -427,6 +425,10 @@ ${(emailContext.body || '').slice(0, 2000)}
 
     const prompt = `Tu es l'assistant Rédacteur d'e-mails IA officiel (inspiré de WriteMail.ai pour Gmail).
 Ta mission est de rédiger un e-mail à la perfection selon les choix de l'utilisateur.
+
+RÈGLE FONDAMENTALE ABSOLUE :
+Tu rédiges l'e-mail DU POINT DE VUE DE L'UTILISATEUR S'ADRESSANT AU DESTINATAIRE (${recipient || 'le correspondant'}).
+Les salutations doivent s'adresser au destinataire (${recipient || 'le correspondant'}). Ne confonds JAMAIS l'utilisateur et son correspondant !
 
 PARAMÈTRES EXIGÉS :
 - Langue obligatoire : ${targetLang}.

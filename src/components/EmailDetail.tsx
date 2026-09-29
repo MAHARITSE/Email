@@ -39,9 +39,6 @@ import {
   X,
   Copy,
   FolderMinus,
-  Maximize2,
-  Minimize2,
-  CalendarPlus,
   Layers,
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
@@ -65,6 +62,8 @@ import {
   improveEmailText,
   draftEmailWithAi,
   detectEmailLanguage,
+  getSmartReplySuggestions,
+  SmartReplySuggestion,
   ImproveAction,
   AiLanguage,
   AiTone,
@@ -85,6 +84,43 @@ import {
   formatSignatureHtml,
 } from '../services/signatureService';
 import { detectFileKind, isPreviewableAttachment } from '../utils/fileKind';
+
+export function isSignatureOrInlineImage(
+  att: EmailAttachment,
+  bodyHtml?: string
+): boolean {
+  if (!att) return false;
+  const mime = (att.mimeType || '').toLowerCase();
+  const isImage = mime.startsWith('image/');
+  if (!isImage) return false;
+
+  // Explicit inline flag
+  if (att.isInline) return true;
+
+  // ContentId referenced inside the HTML body
+  if (att.contentId && bodyHtml) {
+    const cleanCid = att.contentId.replace(/^<|>$/g, '').trim().toLowerCase();
+    if (cleanCid && bodyHtml.toLowerCase().includes(cleanCid)) {
+      return true;
+    }
+  }
+
+  // Common signature image filenames
+  const fn = (att.filename || '').toLowerCase();
+  const signaturePatterns = [
+    'image.png', 'image.jpg', 'image.jpeg', 'image.gif', 'image.webp',
+    'image001', 'image002', 'image003', 'image004', 'image005', 'image006',
+    'logo', 'signature', 'icon', 'banner', 'footer', 'header',
+    'social', 'facebook', 'linkedin', 'twitter', 'instagram', 'youtube',
+    'badge', 'cid', 'mci', 'sanlam', 'allianz'
+  ];
+
+  if (signaturePatterns.some((pattern) => fn.includes(pattern))) {
+    return true;
+  }
+
+  return false;
+}
 
 function formatRecipientsSummary(recipients: Array<{ name: string; email: string }>): string {
   if (!recipients || recipients.length === 0) return 'Destinataire inconnu';
@@ -115,8 +151,8 @@ function parseEmailBodyQuotes(rawHtml: string | null, rawText: string | null): P
   let quotedText: string | null = null;
   let hasQuote = false;
 
-  // Regex pattern matching quote headers in French, Malagasy, English (e.g. "Le ... a écrit :", "On ... wrote:", "De :")
-  const quoteHeaderRegex = /(Le\s+[A-Za-z0-9àáâäçéèêëìíîïòóôöùúûü\s\.,:\/-]+a\s+écrit\s*:|Le\s+[A-Za-z0-9àáâäçéèêëìíîïòóôöùúûü\s\.,:\/-]+à\s+[0-9]{1,2}:[0-9]{2}[^\n]*a\s+écrit|On\s+[A-Za-z0-9\s\.,:\/-]+\s+wrote\s*:|-----\s*Original Message\s*-----|-----\s*Message d['’]origine\s*-----|De\s*:\s*[^\n]+[\r\n]+Sent\s*:|From\s*:\s*[^\n]+[\r\n]+Sent\s*:|De\s*:\s*[^\n]+[\r\n]+Envoyé\s*:)/i;
+  // Regex pattern matching quote headers in French, Malagasy, English (e.g. "Le ... a écrit :", "On ... wrote:", "De :", "Message transféré")
+  const quoteHeaderRegex = /(Le\s+[A-Za-z0-9àáâäçéèêëìíîïòóôöùúûü\s\.,:\/-]+a\s+écrit\s*:|Le\s+[A-Za-z0-9àáâäçéèêëìíîïòóôöùúûü\s\.,:\/-]+à\s+[0-9]{1,2}:[0-9]{2}[^\n]*a\s+écrit|On\s+[A-Za-z0-9\s\.,:\/-]+\s+wrote\s*:|-----\s*Original Message\s*-----|-----\s*Message d['’]origine\s*-----|----------\s*(?:Message transféré|Forwarded message)\s*----------|-----\s*(?:Message transféré|Forwarded message)\s*-----|De\s*:\s*[^\n]+[\r\n]+Sent\s*:|From\s*:\s*[^\n]+[\r\n]+Sent\s*:|De\s*:\s*[^\n]+[\r\n]+Envoyé\s*:)/i;
 
   // 1. Text quote splitting
   if (rawText) {
@@ -257,6 +293,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [expandedCcMsgs, setExpandedCcMsgs] = useState<Record<string, boolean>>({});
   const [expandedToMsgs, setExpandedToMsgs] = useState<Record<string, boolean>>({});
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [readingCanvasMode, setReadingCanvasMode] = useState<'paper' | 'clean' | 'original'>('clean');
   const [highlightedMsgId, setHighlightedMsgId] = useState<string | null>(null);
   const [trimmedExpanded, setTrimmedExpanded] = useState<Record<string, boolean>>({});
 
@@ -293,10 +330,88 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isFullScreen]);
 
+  // Helper to extract clean email address (stripping "Name <email@domain>" wrappers)
+  const extractCleanEmail = (raw: string): string => {
+    if (!raw) return '';
+    const match = raw.match(/<([^>]+)>/);
+    if (match) return match[1].trim();
+    return raw.replace(/["']/g, '').trim();
+  };
+
+  // Helper to accurately determine if a message was sent by the current user
+  const isMessageFromCurrentUser = (msg: ParsedEmail | null | undefined): boolean => {
+    if (!msg) return false;
+    const myEmail = (currentUserEmail || '').toLowerCase().trim();
+    const fromEmail = extractCleanEmail(msg.fromEmail || '').toLowerCase();
+    const fromName = (msg.fromName || '').toLowerCase().trim();
+    return (
+      (Boolean(myEmail) && (fromEmail === myEmail || (myEmail.length > 3 && fromEmail.includes(myEmail)))) ||
+      fromName === 'moi' ||
+      fromName === 'me' ||
+      Boolean(msg.labelIds?.includes('SENT'))
+    );
+  };
+
+  // Helper to find the actual correspondent message (the last message from an external contact in this thread)
+  const getThreadCorrespondentMessage = (msgs: ParsedEmail[] = threadMessages): ParsedEmail => {
+    const list = msgs && msgs.length > 0 ? msgs : [email];
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!isMessageFromCurrentUser(list[i])) {
+        return list[i];
+      }
+    }
+    return list[0] || email;
+  };
+
+  // Helper to get the correct recipient email address and display name for replying (never replying to oneself)
+  const getReplyRecipient = (target?: ParsedEmail | null): { email: string; name: string } => {
+    const effectiveTarget = target || replyTargetEmail || getThreadCorrespondentMessage();
+
+    // If effectiveTarget is from an external sender, reply directly to them
+    if (!isMessageFromCurrentUser(effectiveTarget)) {
+      const cleanEmail = extractCleanEmail(effectiveTarget.fromEmail);
+      const cleanName =
+        resolveContactDisplayName(cleanEmail, effectiveTarget.fromName) ||
+        effectiveTarget.fromName ||
+        cleanEmail;
+      return {
+        email: cleanEmail,
+        name: cleanName,
+      };
+    }
+
+    // If effectiveTarget was sent by the current user, find the correspondent in the thread
+    const correspondent = getThreadCorrespondentMessage();
+    if (correspondent && !isMessageFromCurrentUser(correspondent)) {
+      const cleanEmail = extractCleanEmail(correspondent.fromEmail);
+      const cleanName =
+        resolveContactDisplayName(cleanEmail, correspondent.fromName) ||
+        correspondent.fromName ||
+        cleanEmail;
+      return {
+        email: cleanEmail,
+        name: cleanName,
+      };
+    }
+
+    // Fallback: extract the recipient of my sent message (target.to)
+    const firstTo = (effectiveTarget.to || '').split(',')[0].trim();
+    const cleanEmail = extractCleanEmail(firstTo);
+    const cleanName =
+      resolveContactDisplayName(cleanEmail, firstTo) || cleanEmail || 'Destinataire';
+    return {
+      email: cleanEmail,
+      name: cleanName,
+    };
+  };
+
   // Quick reply & AI states
   const [replyMode, setReplyMode] = useState<'reply' | 'replyAll' | 'forward'>('reply');
-  const [replyTargetEmail, setReplyTargetEmail] = useState<ParsedEmail>(email);
+  const [replyTargetEmail, setReplyTargetEmail] = useState<ParsedEmail>(() =>
+    isMessageFromCurrentUser(email) ? getThreadCorrespondentMessage([email]) : email
+  );
   const [quickReplyText, setQuickReplyText] = useState('');
+  const [quickReplyTo, setQuickReplyTo] = useState('');
   const [quickReplyCc, setQuickReplyCc] = useState('');
   const [quickReplyBcc, setQuickReplyBcc] = useState('');
   const [showQuickReplyCc, setShowQuickReplyCc] = useState(false);
@@ -306,6 +421,18 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [contactsVersion, setContactsVersion] = useState(0);
   const [downloadingAttId, setDownloadingAttId] = useState<string | null>(null);
   const [isZippingEmail, setIsZippingEmail] = useState(false);
+  const [threadRefreshCount, setThreadRefreshCount] = useState(0);
+
+  // Listen to message sent events to automatically refresh the thread history
+  useEffect(() => {
+    const handleSent = (e: any) => {
+      if (!e.detail?.threadId || e.detail?.threadId === email.threadId) {
+        setThreadRefreshCount((c) => c + 1);
+      }
+    };
+    window.addEventListener('gmail-message-sent', handleSent);
+    return () => window.removeEventListener('gmail-message-sent', handleSent);
+  }, [email.threadId]);
 
   // Document Preview Modal states
   const [previewAttachment, setPreviewAttachment] = useState<EmailAttachment | null>(null);
@@ -327,19 +454,73 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [showCategoryMenu, setShowCategoryMenu] = useState(false);
   const [taskAddedFeedback, setTaskAddedFeedback] = useState(false);
 
+  // Smart Reply AI states
+  const [smartReplies, setSmartReplies] = useState<SmartReplySuggestion[]>([]);
+  const [isLoadingSmartReplies, setIsLoadingSmartReplies] = useState(false);
+  const [smartReplyAppliedLabel, setSmartReplyAppliedLabel] = useState<string | null>(null);
+
+  const fetchSmartReplies = async () => {
+    // ALWAYS target the external correspondent message in the conversation, never user's own sent message
+    const correspondentMsg = !isMessageFromCurrentUser(replyTargetEmail)
+      ? replyTargetEmail
+      : getThreadCorrespondentMessage();
+    const recipientInfo = getReplyRecipient(correspondentMsg);
+    const bodyContent = correspondentMsg.bodyText || correspondentMsg.snippet || '';
+    const subjectContent = correspondentMsg.subject || email.subject || '';
+
+    setIsLoadingSmartReplies(true);
+    try {
+      const suggestions = await getSmartReplySuggestions(
+        subjectContent,
+        bodyContent,
+        recipientInfo.name,
+        '',
+        inlineAiLanguage || detectedEmailLang,
+        inlineAiTone
+      );
+      setSmartReplies(suggestions);
+    } catch (err) {
+      console.warn('Smart replies fetch error:', err);
+    } finally {
+      setIsLoadingSmartReplies(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSmartReplies();
+  }, [email.id, replyTargetEmail?.id, detectedEmailLang]);
+
+  const handleApplySmartReply = (suggestion: SmartReplySuggestion) => {
+    const correspondentMsg = !isMessageFromCurrentUser(replyTargetEmail)
+      ? replyTargetEmail
+      : getThreadCorrespondentMessage();
+    if (!showQuickReply) {
+      handleTriggerReply(correspondentMsg, 'reply');
+    }
+    setQuickReplyText(suggestion.replyText);
+    setSmartReplyAppliedLabel(suggestion.label);
+    setTimeout(() => setSmartReplyAppliedLabel(null), 3000);
+    setTimeout(() => {
+      quickReplyRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+  };
+
   const handleCreateTaskFromEmail = () => {
     try {
-      saveAgendaTask({
-        title: `Traiter : ${email.subject || '(Sans objet)'}`,
-        description: `E-mail de ${email.fromName || email.fromEmail}\n${email.snippet || ''}`,
-        type: 'programme',
-        priority: 'haute',
-        dueDate: new Date().toISOString().split('T')[0],
-        dueTime: '10:00',
-        category: effectiveCategory === 'pro' ? 'Professionnel' : effectiveCategory === 'personal' ? 'Personnel' : 'Général',
-        linkedEmailId: email.id,
-        linkedEmailSubject: email.subject || '(Sans objet)',
-      });
+      saveAgendaTask(
+        {
+          title: `Traiter : ${email.subject || '(Sans objet)'}`,
+          description: `E-mail de ${email.fromName || email.fromEmail}\n${email.snippet || ''}`,
+          type: 'programme',
+          priority: 'haute',
+          dueDate: new Date().toISOString().split('T')[0],
+          dueTime: '10:00',
+          category: effectiveCategory === 'pro' ? 'Professionnel' : effectiveCategory === 'personal' ? 'Personnel' : 'Général',
+          linkedEmailId: email.id,
+          linkedEmailSubject: email.subject || '(Sans objet)',
+        },
+        currentUserEmail
+      );
       setTaskAddedFeedback(true);
       setTimeout(() => setTaskAddedFeedback(false), 3000);
     } catch (err) {
@@ -421,8 +602,12 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       fetchThread(token, email.threadId)
         .then((msgs) => {
           if (!isCancelled && msgs && msgs.length > 0) {
-            setThreadMessages(msgs);
-            setReplyTargetEmail(msgs[msgs.length - 1]);
+            // Guarantee strict chronological order (oldest first, newest last like SMS chat)
+            const sorted = [...msgs].sort(
+              (a, b) => Number(a.internalDate || 0) - Number(b.internalDate || 0)
+            );
+            setThreadMessages(sorted);
+            setReplyTargetEmail(getThreadCorrespondentMessage(sorted));
             // Unfold/expand all messages by default on opening thread as requested
             setCollapsedMessages({});
           }
@@ -438,7 +623,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [email.id, email.threadId, token]);
+  }, [email.id, email.threadId, token, threadRefreshCount]);
 
   const toggleCollapseMessage = (msgId: string) => {
     setCollapsedMessages((prev) => ({
@@ -488,11 +673,17 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   };
 
   const handleTriggerReply = (msg: ParsedEmail, mode: 'reply' | 'replyAll' | 'forward') => {
-    const target = mode === 'replyAll'
-      ? (threadMessages[0] || email)
-      : mode === 'reply'
-      ? (threadMessages[threadMessages.length - 1] || email)
-      : msg;
+    let target: ParsedEmail;
+    if (mode === 'forward') {
+      target = msg;
+    } else if (mode === 'replyAll') {
+      target = getThreadCorrespondentMessage();
+    } else {
+      // reply mode: if msg was sent by current user, reply to the thread's correspondent
+      target = !isMessageFromCurrentUser(msg)
+        ? msg
+        : getThreadCorrespondentMessage();
+    }
     setReplyTargetEmail(target);
     setReplyMode(mode);
     setShowQuickReply(true);
@@ -504,6 +695,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     setInlineAiLanguage(detected);
 
     if (mode === 'forward') {
+      setQuickReplyTo('');
       const forwardPrefix = `\n\n\n---------- Message transféré ----------\nDe : ${msg.fromName || msg.fromEmail} <${msg.fromEmail}>\nDate : ${msg.dateStr}\nObjet : ${msg.subject}\nÀ : ${msg.to}\n${msg.cc ? `Cc : ${msg.cc}\n` : ''}\n${msg.bodyText || msg.snippet}`;
       setQuickReplyText(forwardPrefix);
     }
@@ -591,16 +783,19 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     if (!promptToUse) return;
     setIsGeneratingCustomReply(true);
     try {
-      const targetMsg = replyTargetEmail || threadMessages[threadMessages.length - 1] || email;
+      const targetMsg = !isMessageFromCurrentUser(replyTargetEmail)
+        ? replyTargetEmail
+        : getThreadCorrespondentMessage();
+      const recipientInfo = getReplyRecipient(targetMsg);
       const res = await draftEmailWithAi({
         prompt: promptToUse,
-        recipient: targetMsg.fromEmail,
+        recipient: recipientInfo.name || recipientInfo.email,
         tone: inlineAiTone,
         language: inlineAiLanguage,
         emailContext: {
           subject: email.subject,
           body: targetMsg.bodyText || targetMsg.snippet,
-          sender: targetMsg.fromName || targetMsg.fromEmail,
+          sender: recipientInfo.name || recipientInfo.email,
         },
       });
       if (res && res.body) {
@@ -616,9 +811,12 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       console.warn('Erreur génération custom AI reply:', err);
       // Fallback
       try {
-        const targetMsg = replyTargetEmail || threadMessages[threadMessages.length - 1] || email;
+        const targetMsg = !isMessageFromCurrentUser(replyTargetEmail)
+          ? replyTargetEmail
+          : getThreadCorrespondentMessage();
+        const recipientInfo = getReplyRecipient(targetMsg);
         const improved = await improveEmailText(
-          `Génère une réponse professionnelle et polie à cet email (de ${targetMsg.fromName || targetMsg.fromEmail}). Consigne : "${promptToUse}". Contexte du message : "${targetMsg.bodyText || targetMsg.snippet}"`,
+          `Génère une réponse professionnelle et polie à cet email (destiné à ${recipientInfo.name || recipientInfo.email}). Consigne : "${promptToUse}". Contexte du message reçu de sa part : "${targetMsg.bodyText || targetMsg.snippet}"`,
           'professional',
           undefined,
           inlineAiLanguage
@@ -677,59 +875,63 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     let toAddresses = '';
     let ccAddresses = quickReplyCc.trim();
     let bccAddresses = quickReplyBcc.trim();
-    let targetMsg = threadMessages[threadMessages.length - 1] || email;
+    let targetMsg = !isMessageFromCurrentUser(replyTargetEmail)
+      ? replyTargetEmail
+      : getThreadCorrespondentMessage();
     let replySubject = email.subject.startsWith('Re:')
       ? email.subject
       : `Re: ${email.subject}`;
 
     if (replyMode === 'replyAll') {
-      // Reply all: reply to the first email in the thread, with other participants in CC
-      const firstMsg = threadMessages[0] || email;
-      targetMsg = firstMsg;
-      toAddresses = firstMsg.fromEmail;
+      // Reply all: reply to the external correspondent, with other participants in CC
+      const correspondent = getThreadCorrespondentMessage();
+      targetMsg = correspondent;
+      const recipientInfo = getReplyRecipient(correspondent);
+      toAddresses = recipientInfo.email;
 
       const allParticipants = new Set<string>();
       if (ccAddresses) {
-        ccAddresses.split(',').forEach((s) => allParticipants.add(s.trim()));
+        ccAddresses.split(',').forEach((s) => allParticipants.add(extractCleanEmail(s)));
       }
       threadMessages.forEach((m) => {
-        if (m.fromEmail && !m.fromEmail.toLowerCase().includes(currentUserEmail.toLowerCase())) {
-          allParticipants.add(m.fromEmail);
-        }
-        if (m.to) {
-          m.to.split(',').forEach((s) => {
-            const trimmed = s.trim();
-            if (trimmed && !trimmed.toLowerCase().includes(currentUserEmail.toLowerCase())) {
-              allParticipants.add(trimmed);
-            }
-          });
-        }
-        if (m.cc) {
-          m.cc.split(',').forEach((s) => {
-            const trimmed = s.trim();
-            if (trimmed && !trimmed.toLowerCase().includes(currentUserEmail.toLowerCase())) {
-              allParticipants.add(trimmed);
-            }
-          });
-        }
+        [m.fromEmail, ...(m.to ? m.to.split(',') : []), ...(m.cc ? m.cc.split(',') : [])].forEach((raw) => {
+          const clean = extractCleanEmail(raw);
+          if (
+            clean &&
+            clean.toLowerCase() !== currentUserEmail.toLowerCase() &&
+            clean.toLowerCase() !== toAddresses.toLowerCase()
+          ) {
+            allParticipants.add(clean);
+          }
+        });
       });
-      allParticipants.delete(firstMsg.fromEmail);
       ccAddresses = Array.from(allParticipants).join(', ');
-    } else {
-      // Reply: reply to the recipient if sent by me, or to sender if received
+      replySubject = targetMsg.subject.startsWith('Re:')
+        ? targetMsg.subject
+        : `Re: ${targetMsg.subject}`;
+    } else if (replyMode === 'forward') {
       const lastMsg = threadMessages[threadMessages.length - 1] || email;
       targetMsg = lastMsg;
-      const isSentByMe = Boolean(
-        (currentUserEmail && lastMsg.fromEmail?.toLowerCase().trim() === currentUserEmail.toLowerCase().trim()) ||
-        lastMsg.labelIds?.includes('SENT') ||
-        lastMsg.fromName?.toLowerCase() === 'moi'
-      );
-      toAddresses = isSentByMe ? (lastMsg.to || lastMsg.fromEmail) : lastMsg.fromEmail;
+      if (!quickReplyTo.trim()) {
+        alert('Veuillez spécifier le destinataire pour le transfert (champ À :)');
+        return;
+      }
+      toAddresses = extractCleanEmail(quickReplyTo.trim());
+      replySubject = targetMsg.subject.startsWith('Tr:') || targetMsg.subject.startsWith('Fwd:')
+        ? targetMsg.subject
+        : `Tr: ${targetMsg.subject}`;
+    } else {
+      // Reply: ALWAYS reply to the external correspondent (never to current user)
+      const target = !isMessageFromCurrentUser(replyTargetEmail)
+        ? replyTargetEmail
+        : getThreadCorrespondentMessage();
+      targetMsg = target;
+      const recipientInfo = getReplyRecipient(target);
+      toAddresses = recipientInfo.email;
+      replySubject = targetMsg.subject.startsWith('Re:')
+        ? targetMsg.subject
+        : `Re: ${targetMsg.subject}`;
     }
-
-    replySubject = targetMsg.subject.startsWith('Re:')
-      ? targetMsg.subject
-      : `Re: ${targetMsg.subject}`;
 
     onRequestSendQuickReply({
       fromEmail: currentUserEmail,
@@ -744,6 +946,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     });
 
     setQuickReplyText('');
+    setQuickReplyTo('');
     setShowQuickReply(false);
   };
 
@@ -771,7 +974,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
 
   return (
     <div
-      className={`flex-1 flex flex-col h-full overflow-y-auto select-text font-sans transition-all ${
+      className={`flex-1 flex flex-col h-full overflow-y-auto select-text font-sans transition-all min-h-0 w-full ${
         isFullScreen
           ? `fixed inset-0 z-50 overflow-y-auto ${isDark ? 'bg-[#05070A] text-slate-100' : 'bg-white text-slate-900'}`
           : ''
@@ -779,19 +982,19 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
     >
       {/* Top Sticky Navigation / Actions Bar */}
       <div
-        className={`sticky top-0 z-20 flex items-center justify-between px-4 sm:px-8 py-3 border-b backdrop-blur-md transition-colors ${
+        className={`sticky top-0 z-20 flex items-center justify-between px-3 sm:px-8 py-2 sm:py-3 border-b backdrop-blur-md transition-colors ${
           isDark
             ? 'bg-[#0A0D14]/90 border-slate-800 text-slate-200'
             : 'bg-white/95 border-slate-200 text-slate-800'
         }`}
       >
         {/* Left: Back + Common Email Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3">
           <button
             id="detail-back-btn"
             type="button"
             onClick={onBack}
-            className={`inline-flex items-center gap-1.5 rounded-xl p-2 text-xs font-semibold transition ${
+            className={`inline-flex items-center gap-1.5 rounded-xl p-1.5 sm:p-2 text-xs font-semibold transition cursor-pointer ${
               isDark
                 ? 'hover:bg-slate-800 text-slate-300 hover:text-white'
                 : 'hover:bg-slate-100 text-slate-700 hover:text-black'
@@ -802,14 +1005,14 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
             <span className="hidden sm:inline font-mono">Retour</span>
           </button>
 
-          <div className="h-4 w-px bg-slate-400/30 mx-1" />
+          <div className="h-4 w-px bg-slate-400/30 mx-0.5 sm:mx-1" />
 
           {/* Star Toggle */}
           <button
             id="detail-star-btn"
             type="button"
             onClick={() => onToggleStar(email)}
-            className={`p-2 rounded-xl transition ${
+            className={`p-1.5 sm:p-2 rounded-xl transition cursor-pointer ${
               email.isStarred
                 ? 'text-amber-400 hover:bg-amber-400/10'
                 : isDark
@@ -826,7 +1029,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
             id="detail-unread-btn"
             type="button"
             onClick={() => onToggleUnread(email)}
-            className={`p-2 rounded-xl transition ${
+            className={`p-1.5 sm:p-2 rounded-xl transition cursor-pointer ${
               isDark
                 ? 'text-slate-400 hover:text-white hover:bg-slate-800'
                 : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
@@ -841,33 +1044,15 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
             id="detail-trash-btn"
             type="button"
             onClick={() => onRequestTrash(email)}
-            className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition"
-            title="Mettre à la corbeille"
+            className="p-1.5 sm:p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition cursor-pointer"
+            title={email.labelIds?.includes('TRASH') ? 'Supprimer définitivement' : 'Mettre à la corbeille'}
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className={`h-4 w-4 ${email.labelIds?.includes('TRASH') ? 'text-red-400' : ''}`} />
           </button>
         </div>
 
-        {/* Right: Category Picker + Header Utilities (Full Screen, Expand all, Print) */}
+        {/* Right: Category Picker + Header Utilities (Expand all, Print) */}
         <div className="flex items-center gap-2">
-          {/* Full Screen Reading Toggle Button */}
-          <button
-            type="button"
-            onClick={() => setIsFullScreen(!isFullScreen)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition ${
-              isFullScreen
-                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 shadow-xs'
-                : isDark
-                ? 'hover:bg-slate-800 text-slate-300 hover:text-white'
-                : 'hover:bg-slate-100 text-slate-700 hover:text-black'
-            }`}
-            title={isFullScreen ? 'Quitter le mode plein écran (Échap)' : 'Mode lecture plein écran'}
-          >
-            {isFullScreen ? <Minimize2 className="h-4 w-4 text-cyan-400" /> : <Maximize2 className="h-4 w-4" />}
-            <span className="hidden md:inline font-mono text-[11px]">
-              {isFullScreen ? 'Quitter plein écran' : 'Plein écran'}
-            </span>
-          </button>
           {/* Thread expand/collapse all */}
           {threadMessages.length > 1 && (
             <button
@@ -881,33 +1066,6 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               <ChevronsUpDown className="h-4 w-4" />
             </button>
           )}
-
-          {/* Add to Agenda button */}
-          <button
-            type="button"
-            id="detail-add-task-btn"
-            onClick={handleCreateTaskFromEmail}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-              taskAddedFeedback
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                : isDark
-                ? 'hover:bg-slate-800 text-slate-300 hover:text-cyan-400'
-                : 'hover:bg-slate-100 text-slate-700 hover:text-cyan-700'
-            }`}
-            title="Créer une tâche dans l'agenda à partir de cet e-mail"
-          >
-            {taskAddedFeedback ? (
-              <>
-                <Check className="h-4 w-4 text-emerald-400" />
-                <span className="font-mono text-[11px] text-emerald-400">Ajouté !</span>
-              </>
-            ) : (
-              <>
-                <CalendarPlus className="h-4 w-4 text-cyan-400" />
-                <span className="hidden lg:inline font-mono text-[11px]">Agenda</span>
-              </>
-            )}
-          </button>
 
           {/* Print button */}
           <button
@@ -1034,7 +1192,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       {/* STICKY TIMELINE & PARTICIPANTS BAR FOR MULTI-REPLY THREADS */}
       {threadMessages.length > 1 && (
         <div
-          className={`sticky top-[49px] z-10 px-3 sm:px-5 py-1.5 border-b shadow-xs flex flex-wrap items-center justify-between gap-2 text-xs transition-colors backdrop-blur-md ${
+          className={`sticky top-[41px] sm:top-[49px] z-10 px-3 sm:px-5 py-1 sm:py-1.5 border-b shadow-xs flex flex-wrap items-center justify-between gap-1.5 sm:gap-2 text-xs transition-colors backdrop-blur-md ${
             isDark
               ? 'bg-[#0E131F]/95 border-slate-800 text-slate-300'
               : 'bg-slate-100/95 border-slate-200 text-slate-800'
@@ -1046,7 +1204,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               <span>Intervenants ({threadMessages.length}) :</span>
             </span>
 
-            <div className="flex items-center gap-1 overflow-x-auto py-0.5 max-w-full no-scrollbar">
+            <div className="flex items-center gap-1 overflow-x-auto py-0.5 max-w-full no-scrollbar touch-pan-x">
               {threadMessages.map((m, idx) => {
                 const senderName = m.fromName || m.fromEmail.split('@')[0];
                 const isTargeted = replyTargetEmail?.id === m.id;
@@ -1081,7 +1239,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
       )}
 
       {/* Main Conversation Flow */}
-      <div className="flex-1 p-2 sm:p-4 space-y-1.5 max-w-5xl mx-auto w-full">
+      <div className="flex-1 p-2 sm:p-4 space-y-1.5 max-w-5xl mx-auto w-full min-h-0">
         {isLoadingThread && threadMessages.length === 1 ? (
           <div className="flex items-center justify-center py-4 gap-2 text-xs font-mono text-cyan-400">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1624,22 +1782,38 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                   {/* Message Body with Quote Trimming */}
                   {(() => {
                     const parsed = parseEmailBodyQuotes(sanitizedMsgHtml, msg.bodyText);
-                    const isQuoteExpanded = trimmedExpanded[msg.id] || false;
+                    const isQuoteExpanded = trimmedExpanded[msg.id] !== false;
 
                     const innerSanitizeConfig = {
-                      ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|data|blob):|[^a-z]|[a-z+.-]+(?:[^a-z+.-]|$))/i,
+                      ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|cid|data|blob):|[^a-z0-9+\-.]|[a-z0-9+\-.]+)/i,
                       ADD_ATTR: [
                         'target', 'style', 'src', 'alt', 'width', 'height', 'class', 'loading', 'srcset', 'align', 'valign',
                         'color', 'bgcolor', 'background', 'border', 'cellpadding', 'cellspacing', 'face', 'size',
                         'colspan', 'rowspan', 'dir', 'nowrap', 'id', 'name', 'clear',
                         'rel', 'title', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd'
                       ],
-                      ADD_TAGS: ['svg', 'path', 'font', 'center', 'hr', 'br', 'style', 'bdo', 's', 'strike', 'u'],
+                      ADD_TAGS: ['img', 'picture', 'source', 'svg', 'path', 'font', 'center', 'hr', 'br', 'style', 'bdo', 's', 'strike', 'u'],
                       FORBID_TAGS: ['script', 'iframe', 'form'],
                     };
 
-                    const mainSanitizedHtml = parsed.mainHtml ? DOMPurify.sanitize(parsed.mainHtml, innerSanitizeConfig) : null;
-                    const quotedSanitizedHtml = parsed.quotedHtml ? DOMPurify.sanitize(parsed.quotedHtml, innerSanitizeConfig) : null;
+                    let displayHtml = parsed.mainHtml;
+                    let quotedDisplayHtml = parsed.quotedHtml;
+
+                    if (readingCanvasMode === 'clean') {
+                      if (displayHtml) {
+                        displayHtml = displayHtml
+                          .replace(/style=["']([^"']*)background(?:-color)?:\s*(?:white|#fff(?:fff)?|rgb(?:a)?\(255,\s*255,\s*255(?:,\s*1\)?|\)))(;?)([^"']*)["']/gi, 'style="$1$3"')
+                          .replace(/\s*bgcolor=["']?(?:white|#fff(?:fff)?)["']?/gi, '');
+                      }
+                      if (quotedDisplayHtml) {
+                        quotedDisplayHtml = quotedDisplayHtml
+                          .replace(/style=["']([^"']*)background(?:-color)?:\s*(?:white|#fff(?:fff)?|rgb(?:a)?\(255,\s*255,\s*255(?:,\s*1\)?|\)))(;?)([^"']*)["']/gi, 'style="$1$3"')
+                          .replace(/\s*bgcolor=["']?(?:white|#fff(?:fff)?)["']?/gi, '');
+                      }
+                    }
+
+                    const mainSanitizedHtml = displayHtml ? DOMPurify.sanitize(displayHtml, innerSanitizeConfig) : null;
+                    const quotedSanitizedHtml = quotedDisplayHtml ? DOMPurify.sanitize(quotedDisplayHtml, innerSanitizeConfig) : null;
 
                     return (
                       <div className="py-0 min-h-[40px]">
@@ -1647,14 +1821,30 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                         {mainSanitizedHtml ? (
                           <div
                             className={`email-body-content max-w-none break-words text-sm leading-relaxed overflow-x-auto [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_img]:inline-block [&_img]:my-0.5 [&_p]:my-1 [&_div]:my-0 [&_table]:max-w-full [&_table]:my-1 [&>*:last-child]:mb-0 ${
-                              isDark ? 'text-slate-100' : 'text-slate-900'
+                              readingCanvasMode === 'paper'
+                                ? 'email-paper-mode bg-white text-slate-900 border border-slate-200/90 shadow-lg rounded-2xl p-5 sm:p-7 my-2.5 font-sans'
+                                : readingCanvasMode === 'clean'
+                                ? 'email-clean-mode'
+                                : ''
+                            } ${
+                              readingCanvasMode !== 'paper'
+                                ? isDark ? 'text-slate-100' : 'text-slate-900'
+                                : ''
                             }`}
                             dangerouslySetInnerHTML={{ __html: mainSanitizedHtml }}
                           />
                         ) : (
                           <div
                             className={`email-body-content text-sm leading-relaxed whitespace-pre-wrap font-sans [&_a]:text-blue-600 dark:[&_a]:text-blue-400 [&_a]:underline ${
-                              isDark ? 'text-slate-100' : 'text-slate-900'
+                              readingCanvasMode === 'paper'
+                                ? 'email-paper-mode bg-white text-slate-900 border border-slate-200/90 shadow-lg rounded-2xl p-5 sm:p-7 my-2.5'
+                                : readingCanvasMode === 'clean'
+                                ? 'email-clean-mode'
+                                : ''
+                            } ${
+                              readingCanvasMode !== 'paper'
+                                ? isDark ? 'text-slate-100' : 'text-slate-900'
+                                : ''
                             }`}
                             dangerouslySetInnerHTML={{
                               __html: DOMPurify.sanitize(
@@ -1665,9 +1855,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                           />
                         )}
 
-                        {/* Inline Display for Image Attachments (signatures, coordinates, contact cards) */}
+                        {/* Inline Display for Image Attachments (Excludes signature logos) */}
                         {(() => {
-                          const imgAtts = (msg.attachments || []).filter((a) => a.mimeType?.toLowerCase().startsWith('image/'));
+                          const imgAtts = (msg.attachments || []).filter(
+                            (a) => a.mimeType?.toLowerCase().startsWith('image/') && !isSignatureOrInlineImage(a, msg.bodyHtml)
+                          );
                           if (imgAtts.length === 0) return null;
                           return (
                             <div className="my-1.5 flex flex-wrap gap-1.5 items-center">
@@ -1729,8 +1921,14 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
 
                                 {quotedSanitizedHtml ? (
                                   <div
-                                    className={`email-body-content max-w-none break-words opacity-85 text-xs [&>*:last-child]:mb-0 ${
-                                      isDark ? 'text-slate-300' : 'text-slate-700'
+                                    className={`email-body-content max-w-none break-words text-xs [&>*:last-child]:mb-0 ${
+                                      readingCanvasMode === 'paper'
+                                        ? 'email-paper-mode bg-white text-slate-900 border border-slate-200/90 shadow-sm rounded-xl p-4 my-2'
+                                        : 'email-clean-mode'
+                                    } ${
+                                      readingCanvasMode !== 'paper'
+                                        ? isDark ? 'text-slate-100' : 'text-slate-900'
+                                        : ''
                                     }`}
                                     dangerouslySetInnerHTML={{ __html: quotedSanitizedHtml }}
                                   />
@@ -1765,43 +1963,50 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                     </div>
                   )}
 
-                  {/* Attachments Grid if any */}
-                  {msg.attachments && msg.attachments.length > 0 && (
-                    <div
-                      className={`border rounded-xl p-4 mt-5 ${
-                        isDark ? 'border-slate-800 bg-[#0B0F17]' : 'border-slate-200 bg-slate-50'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-700/30">
-                        <div className="flex items-center gap-2">
-                          <Paperclip className="h-4 w-4 text-cyan-400" />
-                          <span
-                            className={`text-xs font-mono font-bold uppercase tracking-wider ${
-                              isDark ? 'text-slate-200' : 'text-slate-800'
-                            }`}
-                          >
-                            {msg.attachments.length} Pièce{msg.attachments.length > 1 ? 's' : ''} jointe{msg.attachments.length > 1 ? 's' : ''}
-                          </span>
-                        </div>
-                        {msg.attachments.length > 1 && token && (
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadAllZip(msg.attachments)}
-                            disabled={isZippingEmail}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-mono font-semibold rounded-lg transition ${
-                              isDark
-                                ? 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20'
-                                : 'bg-cyan-50 border border-cyan-300 text-cyan-800 hover:bg-cyan-100'
-                            }`}
-                          >
-                            <Download className="h-3 w-3" />
-                            <span>Tout télécharger (.ZIP)</span>
-                          </button>
-                        )}
-                      </div>
+                  {/* Attachments Grid (Excludes inline signature logos / CID images) */}
+                  {(() => {
+                    const realAttachments = (msg.attachments || []).filter(
+                      (att) => !isSignatureOrInlineImage(att, msg.bodyHtml)
+                    );
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {msg.attachments.map((att) => {
+                    if (realAttachments.length === 0) return null;
+
+                    return (
+                      <div
+                        className={`border rounded-xl p-4 mt-5 ${
+                          isDark ? 'border-slate-800 bg-[#0B0F17]' : 'border-slate-200 bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-700/30">
+                          <div className="flex items-center gap-2">
+                            <Paperclip className="h-4 w-4 text-cyan-400" />
+                            <span
+                              className={`text-xs font-mono font-bold uppercase tracking-wider ${
+                                isDark ? 'text-slate-200' : 'text-slate-800'
+                              }`}
+                            >
+                              {realAttachments.length} Pièce{realAttachments.length > 1 ? 's' : ''} jointe{realAttachments.length > 1 ? 's' : ''}
+                            </span>
+                          </div>
+                          {realAttachments.length > 1 && token && (
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadAllZip(realAttachments)}
+                              disabled={isZippingEmail}
+                              className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-mono font-semibold rounded-lg transition ${
+                                isDark
+                                  ? 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20'
+                                  : 'bg-cyan-50 border border-cyan-300 text-cyan-800 hover:bg-cyan-100'
+                              }`}
+                            >
+                              <Download className="h-3 w-3" />
+                              <span>Tout télécharger (.ZIP)</span>
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {realAttachments.map((att) => {
                           const isDownloading = downloadingAttId === att.id;
                           const kind = detectFileKind(att.filename, att.mimeType);
                           const mime = att.mimeType.toLowerCase();
@@ -1883,13 +2088,115 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                         })}
                       </div>
                     </div>
-                  )}
+                  );
+                })()}
 
                 </div>
               )}
             </div>
           );
         })}
+
+        {/* AI SMART REPLIES SUGGESTION BAR */}
+        <div className={`mt-4 mb-2 p-3 rounded-2xl border transition-colors ${
+          isDark
+            ? 'bg-gradient-to-r from-[#0C121E] via-[#0A0E1A] to-[#121024] border-cyan-500/30'
+            : 'bg-gradient-to-r from-cyan-50/80 via-slate-50 to-indigo-50/80 border-cyan-200'
+        }`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="p-1 rounded-md bg-cyan-500/20 text-cyan-400">
+                <Sparkles className="h-3.5 w-3.5" />
+              </div>
+              <span className="text-xs font-bold font-mono tracking-wide flex items-center gap-1.5">
+                <span>Réponses automatiques IA</span>
+                <span className={`text-[10px] px-2 py-0.2 rounded-full border ${
+                  isDark ? 'bg-cyan-950/60 text-cyan-300 border-cyan-800/60' : 'bg-cyan-100 text-cyan-800 border-cyan-300'
+                }`}>
+                  {detectedEmailLang}
+                </span>
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={fetchSmartReplies}
+              disabled={isLoadingSmartReplies}
+              className={`text-[11px] font-mono hover:underline flex items-center gap-1 transition cursor-pointer ${
+                isDark ? 'text-slate-400 hover:text-cyan-300' : 'text-slate-600 hover:text-cyan-800'
+              }`}
+              title="Régénérer de nouvelles suggestions de réponse avec l'IA"
+            >
+              {isLoadingSmartReplies ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin text-cyan-400" />
+                  <span>Génération...</span>
+                </>
+              ) : (
+                <>
+                  <span>🔄 Régénérer</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Feedback banner when smart reply is applied */}
+          {smartReplyAppliedLabel && (
+            <div className="mb-2 text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-500/30 px-2.5 py-1 rounded-lg flex items-center gap-1.5 animate-in fade-in">
+              <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+              <span>Réponse « <strong>{smartReplyAppliedLabel}</strong> » insérée dans le champ de réponse !</span>
+            </div>
+          )}
+
+          {/* Smart Reply Pills List */}
+          <div className="flex flex-wrap items-center gap-2">
+            {isLoadingSmartReplies && smartReplies.length === 0 ? (
+              <div className="flex items-center gap-2 py-1 text-xs text-slate-400 font-mono">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-cyan-400" />
+                <span>Analyse du message et création de 3 réponses intelligentes...</span>
+              </div>
+            ) : smartReplies.length > 0 ? (
+              smartReplies.map((sug, idx) => {
+                const isPositive = sug.tone === 'positive';
+                const isClarify = sug.tone === 'clarify' || sug.tone === 'neutral';
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleApplySmartReply(sug)}
+                    className={`group relative flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all active:scale-95 cursor-pointer shadow-xs ${
+                      isPositive
+                        ? isDark
+                          ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-200 hover:bg-emerald-900/50 hover:border-emerald-400'
+                          : 'bg-emerald-50 border-emerald-300 text-emerald-900 hover:bg-emerald-100'
+                        : isClarify
+                        ? isDark
+                          ? 'bg-cyan-950/30 border-cyan-500/40 text-cyan-200 hover:bg-cyan-900/50 hover:border-cyan-400'
+                          : 'bg-cyan-50 border-cyan-300 text-cyan-900 hover:bg-cyan-100'
+                        : isDark
+                        ? 'bg-slate-900/60 border-slate-700/80 text-slate-300 hover:bg-slate-800 hover:border-slate-600'
+                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                    }`}
+                    title={sug.replyText}
+                  >
+                    <Sparkles className={`h-3.5 w-3.5 shrink-0 ${
+                      isPositive ? 'text-emerald-400' : isClarify ? 'text-cyan-400' : 'text-amber-400'
+                    }`} />
+                    <span className="font-semibold">{sug.label}</span>
+                  </button>
+                );
+              })
+            ) : (
+              <button
+                type="button"
+                onClick={fetchSmartReplies}
+                className="text-xs font-mono text-cyan-400 hover:underline py-1 cursor-pointer"
+              >
+                + Obtenir des réponses suggérées par l'IA
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* ALWAYS VISIBLE COMPACT BOTTOM ACTION BAR */}
         <div className={`mt-3 pt-2.5 border-t ${
@@ -1899,7 +2206,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
           <div className="flex flex-wrap items-center justify-start gap-2">
             <button
               type="button"
-              onClick={() => handleTriggerReply(threadMessages[threadMessages.length - 1] || email, 'reply')}
+              onClick={() => handleTriggerReply(getThreadCorrespondentMessage(), 'reply')}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${
                 isDark
                   ? 'border-cyan-500/40 bg-cyan-950/30 hover:bg-cyan-900/50 text-cyan-200 hover:text-white shadow-xs'
@@ -1912,7 +2219,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
 
             <button
               type="button"
-              onClick={() => handleTriggerReply(threadMessages[threadMessages.length - 1] || email, 'replyAll')}
+              onClick={() => handleTriggerReply(getThreadCorrespondentMessage(), 'replyAll')}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${
                 isDark
                   ? 'border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-900/50 text-emerald-200 hover:text-white shadow-xs'
@@ -1925,7 +2232,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
 
             <button
               type="button"
-              onClick={() => onOpenForward(threadMessages[threadMessages.length - 1] || email)}
+              onClick={() => handleTriggerReply(getThreadCorrespondentMessage(), 'forward')}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition active:scale-95 cursor-pointer ${
                 isDark
                   ? 'border-blue-500/40 bg-blue-950/30 hover:bg-blue-900/50 text-blue-200 hover:text-white shadow-xs'
@@ -1954,11 +2261,11 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                 <CornerUpLeft className="h-4 w-4 text-cyan-400" />
                 <span className="text-xs font-bold">
                   {replyMode === 'replyAll' ? (
-                    <span>Réponse à tous ({replyTargetEmail.fromName || replyTargetEmail.fromEmail})</span>
+                    <span>Réponse à tous ({getReplyRecipient(replyTargetEmail).name})</span>
                   ) : replyMode === 'forward' ? (
                     <span>Transférer le message</span>
                   ) : (
-                    <span>Répondre à {replyTargetEmail.fromName || replyTargetEmail.fromEmail}</span>
+                    <span>Répondre à {getReplyRecipient(replyTargetEmail).name}</span>
                   )}
                 </span>
               </div>
@@ -1988,7 +2295,10 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                   onClick={() =>
                     replyMode === 'forward'
                       ? onOpenForward(replyTargetEmail)
-                      : onOpenReply(replyTargetEmail, replyMode)
+                      : onOpenReply(
+                          !isMessageFromCurrentUser(replyTargetEmail) ? replyTargetEmail : getThreadCorrespondentMessage(),
+                          replyMode
+                        )
                   }
                   className="text-xs font-mono text-cyan-500 hover:underline cursor-pointer"
                 >
@@ -2009,9 +2319,26 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
               {/* CC / BCC Toggle & Inputs */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs font-mono">
-                  <span className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    À : <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{replyMode === 'replyAll' ? (threadMessages[0]?.fromEmail || email.fromEmail) : (threadMessages[threadMessages.length - 1]?.fromEmail || email.fromEmail)}</strong>
-                  </span>
+                  {replyMode === 'forward' ? (
+                    <div className="flex items-center gap-2 flex-1 mr-2">
+                      <span className="text-[11px] font-mono uppercase font-bold text-cyan-500 shrink-0">À :</span>
+                      <input
+                        type="email"
+                        required
+                        value={quickReplyTo}
+                        onChange={(e) => setQuickReplyTo(e.target.value)}
+                        placeholder="Destinataire pour le transfert (ex. contact@exemple.com)..."
+                        className={`flex-1 px-2.5 py-1 text-xs rounded-lg border outline-none font-sans ${
+                          isDark ? 'bg-slate-900 border-slate-700 text-white focus:border-cyan-400' : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-cyan-600'
+                        }`}
+                        autoFocus
+                      />
+                    </div>
+                  ) : (
+                    <span className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                      À : <strong className={isDark ? 'text-slate-200' : 'text-slate-800'}>{getReplyRecipient(replyTargetEmail).email}</strong>
+                    </span>
+                  )}
                   <div className="flex items-center gap-2">
                     {!showQuickReplyCc && (
                       <button
@@ -2106,7 +2433,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                         >
                           {threadMessages.map((m, i) => (
                             <option key={m.id} value={m.id}>
-                              #{i + 1} ({resolveContactDisplayName(m.fromEmail, m.fromName)})
+                              #{i + 1} ({isMessageFromCurrentUser(m) ? 'Moi' : (resolveContactDisplayName(m.fromEmail, m.fromName) || m.fromName || m.fromEmail)})
                             </option>
                           ))}
                         </select>

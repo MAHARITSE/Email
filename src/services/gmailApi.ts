@@ -207,15 +207,33 @@ export function parseRawMessage(msg: GmailRawMessage): ParsedEmail {
 
 export function notifyIfAuthError(status: number, message?: string) {
   if (
+    message &&
+    (message.toLowerCase().includes('has not been used in project') ||
+      message.toLowerCase().includes('is disabled') ||
+      message.toLowerCase().includes('access_not_configured') ||
+      message.toLowerCase().includes('gmail api has not been enabled'))
+  ) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('gmail-api-disabled', {
+          detail: { message },
+        })
+      );
+    }
+    return;
+  }
+
+  // Only trigger session expiration for genuine 401 unauthenticated or explicit token expiry
+  const isAuthExpired =
     status === 401 ||
-    status === 403 ||
     (message &&
       (message.toLowerCase().includes('invalid authentication credentials') ||
         message.toLowerCase().includes('oauth 2 access token') ||
         message.toLowerCase().includes('unauthenticated') ||
         message.toLowerCase().includes('token expired') ||
-        message.toLowerCase().includes('login cookie')))
-  ) {
+        message.toLowerCase().includes('login cookie')));
+
+  if (isAuthExpired) {
     if (typeof window !== 'undefined') {
       try {
         window.sessionStorage.removeItem('gmail_net_oauth_access_token');
@@ -252,103 +270,9 @@ export function getMockFallbackLabels(): GmailLabel[] {
   ];
 }
 
-export function getMockFallbackEmails(): ParsedEmail[] {
-  const now = Date.now();
-  const mockPeople = [
-    { name: 'Équipe Support', email: 'support@workspace.ai', subj: 'Bienvenue sur votre messagerie intelligente', isUnread: true, isStarred: true, cat: 'sites' },
-    { name: 'MAHARITSE Hyacinthe Bertrand', email: 'maharitse@gmail.com', subj: 'Point sur le projet et avancement des livrables', isUnread: true, isStarred: false, cat: 'personal' },
-    { name: 'Google Cloud Platform', email: 'no-reply@google.com', subj: 'Confirmation de votre inscription aux services cloud', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Sophie Martin', email: 'sophie.martin@entreprise-conseil.fr', subj: 'Devis et planning de déploiement Q3', isUnread: true, isStarred: true, cat: 'pro' },
-    { name: 'Jean Dupont', email: 'jean.dupont@orange.fr', subj: 'Organisation du week-end en famille', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'GitHub Notifications', email: 'notifications@github.com', subj: '[Release v2.4.0] Déploiement réussi sur production', isUnread: true, isStarred: false, cat: 'sites' },
-    { name: 'Claire Bernard', email: 'claire.bernard@gmail.com', subj: 'Photos et souvenirs des vacances', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Service Facturation EDF', email: 'contact@factures-edf.fr', subj: 'Votre facture mensuelle électricité', isUnread: false, isStarred: false, cat: 'pro' },
-    { name: 'Stripe Payments', email: 'notifications@stripe.com', subj: 'Rapport de virement bancaire mensuel', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Thomas Dubois', email: 'thomas.dubois@tech-agency.com', subj: 'Candidature développeur TypeScript / React', isUnread: true, isStarred: true, cat: 'pro' },
-    { name: 'Impôts Gouv', email: 'ne-pas-repondre@dgfip.finances.gouv.fr', subj: 'Notification : Déclaration et avis d\'imposition', isUnread: false, isStarred: false, cat: 'other' },
-    { name: 'LinkedIn', email: 'messages-noreply@linkedin.com', subj: 'Vous avez 5 nouvelles consultations de profil', isUnread: true, isStarred: false, cat: 'sites' },
-    { name: 'Alexandre Moreau', email: 'alexandre.moreau@cabinet-avocat.com', subj: 'Validation du contrat de prestation de services', isUnread: false, isStarred: true, cat: 'pro' },
-    { name: 'Camille Roux', email: 'camille.roux@yahoo.fr', subj: 'Invitation déjeuner vendredi midi', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Banque Postale Alerte', email: 'alerte-securite@labanquepostale.fr', subj: 'Code de sécurité pour confirmation de virement', isUnread: false, isStarred: false, cat: 'other' },
-    { name: 'Julien Lefebvre', email: 'julien.lefebvre@saas-studio.io', subj: 'Revue d\'architecture et tests de montée en charge', isUnread: true, isStarred: false, cat: 'pro' },
-    { name: 'Amazon.fr', email: 'auto-confirm@amazon.fr', subj: 'Expédition de votre commande n° 402-9918273', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Nathalie Garcia', email: 'nathalie.garcia@outlook.com', subj: 'Nouvelles de la rentrée et planning', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Figma Team', email: 'news@figma.com', subj: 'Nouvelles fonctionnalités de design system collaboratif', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Nicolas Petit', email: 'nicolas.petit@solutions-web.com', subj: 'Compte-rendu de la réunion client du 3 septembre', isUnread: false, isStarred: false, cat: 'pro' },
-    { name: 'SNCF Connect', email: 'billet-confirmation@sncf-connect.com', subj: 'Vos e-billets TGV Paris - Lyon', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Élodie Mercier', email: 'elodie.mercier@free.fr', subj: 'Recommandation de livre et article technique', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Doctolib', email: 'rappel-rdv@doctolib.fr', subj: 'Rappel de votre rendez-vous médical', isUnread: false, isStarred: false, cat: 'other' },
-    { name: 'Antoine Laurent', email: 'antoine.laurent@cloud-consulting.eu', subj: 'Proposition commerciale infogérance serveurs', isUnread: true, isStarred: false, cat: 'pro' },
-    { name: 'Spotify Music', email: 'no-reply@spotify.com', subj: 'Votre récapitulatif musical de la semaine', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Mathieu Bonnet', email: 'mathieu.bonnet@sfr.fr', subj: 'Sortie vélo et entraînement ce dimanche', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'OVHcloud Support', email: 'support@ovhcloud.com', subj: 'Renouvellement automatique de votre nom de domaine', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Sarah Benali', email: 'sarah.benali@fintech-corp.com', subj: 'Audit de sécurité des API et conformité RGPD', isUnread: true, isStarred: true, cat: 'pro' },
-    { name: 'Service Public Authentification', email: 'authentification@franceconnect.gouv.fr', subj: 'Connexion à votre espace personnel FranceConnect', isUnread: false, isStarred: false, cat: 'other' },
-    { name: 'Lucas Girard', email: 'lucas.girard@gmail.com', subj: 'Re: Covoiturage et horaires pour le congrès', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Notion Team', email: 'team@m.notion.so', subj: 'Workspace updates: New formula syntax is live', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Valérie Rousseau', email: 'valerie.rousseau@cabinet-comptable.fr', subj: 'Transmission des pièces comptables du trimestre', isUnread: true, isStarred: false, cat: 'pro' },
-    { name: 'Slack Notifications', email: 'notifications@slack.com', subj: 'Nouveaux messages dans le canal #projet-refonte', isUnread: true, isStarred: false, cat: 'sites' },
-    { name: 'Pierre Simon', email: 'pierre.simon@laposte.net', subj: 'Invitation à l\'anniversaire de Chloé', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Uber Receipts', email: 'uber.france@uber.com', subj: 'Votre course Uber d\'hier soir', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Guillaume Fournier', email: 'guillaume.fournier@agence-digitale.fr', subj: 'Maquettes UI/UX validées pour la messagerie', isUnread: false, isStarred: true, cat: 'pro' },
-    { name: 'Ameli Assurance Maladie', email: 'ne-pas-repondre@assurance-maladie.fr', subj: 'Nouveau relevé de remboursement disponible', isUnread: false, isStarred: false, cat: 'other' },
-    { name: 'Audrey Lambert', email: 'audrey.lambert@gmail.com', subj: 'Réservation de la maison pour les vacances', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Vercel Deployment', email: 'notifications@vercel.com', subj: 'Production deployment ready for branch main', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Romain Michel', email: 'romain.michel@software-house.com', subj: 'Synthèse des tests unitaires et intégration continue', isUnread: true, isStarred: false, cat: 'pro' },
-    { name: 'Deliveroo', email: 'info@deliveroo.fr', subj: 'Confirmation de commande et suivi du livreur', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Céline Leroy', email: 'celine.leroy@outlook.fr', subj: 'Re: Partage de documents et notes de cours', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Service Carte Bancaire', email: 'alerte-securite@banque-en-ligne.fr', subj: 'Mise à jour des règles de sécurité bancaire 3D Secure', isUnread: false, isStarred: false, cat: 'other' },
-    { name: 'Maxime David', email: 'maxime.david@ingenierie-systemes.fr', subj: 'Compte-rendu de réunion d\'avancement technique', isUnread: false, isStarred: false, cat: 'pro' },
-    { name: 'Medium Daily Digest', email: 'noreply@medium.com', subj: 'Top stories in TypeScript, AI, and System Design', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Béatrice Fontaine', email: 'beatrice.fontaine@orange.fr', subj: 'Recette de famille et nouvelles des enfants', isUnread: false, isStarred: false, cat: 'personal' },
-    { name: 'Cloudflare Notifications', email: 'no-reply@cloudflare.com', subj: 'SSL/TLS Certificate successfully issued', isUnread: false, isStarred: false, cat: 'sites' },
-    { name: 'Florian Chevalier', email: 'florian.chevalier@data-metrics.io', subj: 'Tableau de bord des statistiques d\'utilisation', isUnread: true, isStarred: false, cat: 'pro' },
-    { name: 'Google Security', email: 'no-reply@accounts.google.com', subj: 'Alerte de sécurité : Nouvel appareil connecté', isUnread: false, isStarred: false, cat: 'other' },
-    { name: 'Isabelle Fabre', email: 'isabelle.fabre@gmail.com', subj: 'Confirmation de présence pour la réunion de quartier', isUnread: false, isStarred: false, cat: 'personal' },
-  ];
-
-  return mockPeople.map((p, idx) => {
-    const msgId = `mock_msg_${idx + 1}`;
-    const threadId = `mock_thread_${idx + 1}`;
-    const timeOffset = idx * 3600000 * 2.5;
-    const internalDate = String(now - timeOffset);
-    const dateStr = idx === 0 ? "Aujourd'hui, 08:30" : idx === 1 ? 'Hier, 14:15' : `${Math.max(1, 30 - idx)} août`;
-    const labelIds = ['INBOX'];
-    if (p.isUnread) labelIds.push('UNREAD');
-    if (p.isStarred) labelIds.push('STARRED');
-
-    return {
-      id: msgId,
-      threadId,
-      labelIds,
-      subject: p.subj,
-      fromName: p.name,
-      fromEmail: p.email,
-      to: 'maharitse@gmail.com',
-      cc: '',
-      dateStr,
-      internalDate,
-      snippet: `Bonjour, concernant : ${p.subj}. Voici les détails actualisés et le suivi des actions en cours.`,
-      bodyHtml: `<div style="font-family:sans-serif; padding:16px;"><h3>${p.subj}</h3><p>Bonjour,</p><p>Concernant votre dossier : <strong>${p.subj}</strong>. Tout progresse comme convenu.</p><p>Cordialement,<br><strong>${p.name}</strong></p></div>`,
-      bodyText: `${p.subj}\n\nBonjour,\n\nConcernant votre dossier : ${p.subj}. Tout progresse comme convenu.\n\nCordialement,\n${p.name}`,
-      isUnread: p.isUnread,
-      isStarred: p.isStarred,
-      attachments: idx === 1 ? [
-        {
-          id: 'att_1',
-          messageId: msgId,
-          filename: 'Rapport_Projet_2026.pdf',
-          mimeType: 'application/pdf',
-          size: 245000,
-          dateStr,
-          internalDate,
-          emailSubject: p.subj,
-          fromName: p.name,
-          fromEmail: p.email,
-        }
-      ] : [],
-    };
-  });
+export function getMockFallbackEmails(_userEmail?: string): ParsedEmail[] {
+  // Never display fake/mock emails - only load real emails from active mailbox
+  return [];
 }
 
 export async function fetchProfile(token: string): Promise<GmailProfile> {
@@ -433,82 +357,18 @@ export interface ListMessagesResponse {
 
 export async function listMessages(
   token: string,
-  params: ListMessagesParams = {}
+  params: ListMessagesParams = {},
+  userEmail?: string
 ): Promise<ListMessagesResponse> {
   try {
-    const threadMax = params.maxResults || 50;
+    const requestedMax = params.maxResults || 50;
     const isSpamOrTrash =
       params.labelIds?.some((id) => id === 'SPAM' || id === 'TRASH') ||
       params.query?.toLowerCase().includes('spam') ||
       params.query?.toLowerCase().includes('trash');
 
-    const threadUrl = new URL(`${GMAIL_BASE}/threads`);
-    threadUrl.searchParams.set('maxResults', String(threadMax));
-    if (isSpamOrTrash) {
-      threadUrl.searchParams.set('includeSpamTrash', 'true');
-    }
-
-    if (params.query && params.query.trim()) {
-      threadUrl.searchParams.set('q', params.query.trim());
-    }
-    if (params.labelIds && params.labelIds.length > 0) {
-      params.labelIds.forEach((id) => threadUrl.searchParams.append('labelIds', id));
-    }
-    if (params.pageToken) {
-      threadUrl.searchParams.set('pageToken', params.pageToken);
-    }
-
-    const threadRes = await fetch(threadUrl.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    if (threadRes.ok) {
-      const threadData = await threadRes.json();
-      const rawThreads: { id: string }[] = threadData.threads || [];
-
-      if (rawThreads.length === 0) {
-        return {
-          emails: [],
-          nextPageToken: threadData.nextPageToken,
-          resultSizeEstimate: 0,
-        };
-      }
-
-      // Fetch full thread details (each thread contains all its messages and replies)
-      const threadPromises = rawThreads.map(async (item) => {
-        try {
-          const res = await fetch(`${GMAIL_BASE}/threads/${item.id}?format=full`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (!res.ok) return [];
-          const threadJson = await res.json();
-          const threadMsgs: GmailRawMessage[] = threadJson.messages || [];
-          return threadMsgs.map((m) => parseRawMessage(m)).filter((m): m is ParsedEmail => m !== null);
-        } catch {
-          return [];
-        }
-      });
-
-      const threadResults = await Promise.all(threadPromises);
-      const emails = threadResults.flat();
-
-      return {
-        emails,
-        nextPageToken: threadData.nextPageToken,
-        resultSizeEstimate: threadData.resultSizeEstimate || rawThreads.length,
-      };
-    } else {
-      if (threadRes.status === 401 || threadRes.status === 403) {
-        const errJson = await threadRes.json().catch(() => null);
-        const msg = errJson?.error?.message || `Auth error (${threadRes.status})`;
-        notifyIfAuthError(threadRes.status, msg);
-        throw new Error(msg);
-      }
-    }
-
-    // Fallback to /messages if /threads was not supported
-    const url = new URL(`${GMAIL_BASE}/messages`);
-    const requestedMax = params.maxResults ? Math.min(100, Math.max(50, params.maxResults * 2)) : 100;
+    // Fetch conversations (threads) so each thread/conversation (regardless of reply count) counts as 1 item
+    const url = new URL(`${GMAIL_BASE}/threads`);
     url.searchParams.set('maxResults', String(requestedMax));
     if (isSpamOrTrash) {
       url.searchParams.set('includeSpamTrash', 'true');
@@ -530,13 +390,13 @@ export async function listMessages(
 
     if (!res.ok) {
       const errJson = await res.json().catch(() => null);
-      const msg = errJson?.error?.message || `Failed to list messages (${res.status})`;
+      const msg = errJson?.error?.message || `Failed to list threads (${res.status})`;
       notifyIfAuthError(res.status, msg);
       throw new Error(msg);
     }
 
     const data = await res.json();
-    const rawList: { id: string; threadId: string }[] = data.messages || [];
+    const rawList: { id: string; snippet?: string; historyId?: string }[] = data.threads || [];
 
     if (rawList.length === 0) {
       return {
@@ -546,42 +406,71 @@ export async function listMessages(
       };
     }
 
-    // Fetch full details for the returned batch
+    // Fetch full thread details (including all messages/replies in each thread)
     const detailPromises = rawList.map(async (item) => {
       try {
-        const msgRes = await fetch(`${GMAIL_BASE}/messages/${item.id}?format=full`, {
+        const threadRes = await fetch(`${GMAIL_BASE}/threads/${item.id}?format=full`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!msgRes.ok) return null;
-        const rawMsg: GmailRawMessage = await msgRes.json();
-        return parseRawMessage(rawMsg);
+        if (!threadRes.ok) return [];
+        const threadData = await threadRes.json();
+        const rawMsgs: GmailRawMessage[] = threadData.messages || [];
+        return rawMsgs.map((m) => parseRawMessage(m));
       } catch {
-        return null;
+        return [];
       }
     });
 
-    const resolved = await Promise.all(detailPromises);
-    const emails = resolved.filter((m): m is ParsedEmail => m !== null);
+    const resolvedLists = await Promise.all(detailPromises);
+    const emails = resolvedLists.flat();
 
     return {
       emails,
       nextPageToken: data.nextPageToken,
-      resultSizeEstimate: data.resultSizeEstimate || emails.length,
+      resultSizeEstimate: data.resultSizeEstimate || rawList.length,
     };
   } catch (err: any) {
     if (err?.message && (err.message.includes('401') || err.message.includes('403'))) {
       throw err;
     }
-    console.warn('Network error or failed fetch in listMessages, using mock fallback emails:', err);
-    let fallbackEmails = getMockFallbackEmails();
+    console.warn('Network error or failed fetch in listMessages, using account-specific mock emails:', err);
+    let fallbackEmails = getMockFallbackEmails(userEmail);
+    if (params.query) {
+      const q = params.query.toLowerCase().replace(/is:\w+/g, '').replace(/label:\w+/g, '').trim();
+      if (q) {
+        fallbackEmails = fallbackEmails.filter((e) => {
+          const inSubject = e.subject?.toLowerCase().includes(q);
+          const inFrom =
+            e.fromName?.toLowerCase().includes(q) ||
+            e.fromEmail?.toLowerCase().includes(q);
+          const inTo = e.to?.toLowerCase().includes(q);
+          const inCc = e.cc?.toLowerCase().includes(q);
+          const inSnippet = e.snippet?.toLowerCase().includes(q);
+          const inBody =
+            e.bodyText?.toLowerCase().includes(q) ||
+            e.bodyHtml?.toLowerCase().includes(q);
+          return inSubject || inFrom || inTo || inCc || inSnippet || inBody;
+        });
+      }
+    }
     if (params.query?.includes('is:unread')) {
       fallbackEmails = fallbackEmails.filter((e) => e.isUnread);
     } else if (params.query?.includes('is:starred')) {
       fallbackEmails = fallbackEmails.filter((e) => e.isStarred);
     }
+
+    const pageSize = params.maxResults || 50;
+    const pageTokenNum = params.pageToken ? parseInt(params.pageToken, 10) : 0;
+    const startIndex = isNaN(pageTokenNum) ? 0 : pageTokenNum;
+    const paginatedSlice = fallbackEmails.slice(startIndex, startIndex + pageSize);
+    const nextToken =
+      startIndex + pageSize < fallbackEmails.length
+        ? String(startIndex + pageSize)
+        : undefined;
+
     return {
-      emails: fallbackEmails,
-      nextPageToken: undefined,
+      emails: paginatedSlice,
+      nextPageToken: nextToken,
       resultSizeEstimate: fallbackEmails.length,
     };
   }
@@ -691,6 +580,39 @@ export async function untrashMessage(token: string, id: string): Promise<void> {
     const msg = errJson?.error?.message || `Failed to restore message (${res.status})`;
     notifyIfAuthError(res.status, msg);
     throw new Error(msg);
+  }
+}
+
+export async function deleteMessage(token: string, id: string): Promise<void> {
+  const res = await fetch(`${GMAIL_BASE}/messages/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => null);
+    const msg = errJson?.error?.message || `Failed to permanently delete message (${res.status})`;
+    notifyIfAuthError(res.status, msg);
+    throw new Error(msg);
+  }
+}
+
+export async function batchDeleteMessages(token: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    const res = await fetch(`${GMAIL_BASE}/messages/batchDelete`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ids }),
+    });
+    if (!res.ok) {
+      // Fallback: delete one by one if batchDelete is restricted
+      await Promise.all(ids.map((id) => deleteMessage(token, id).catch(() => {})));
+    }
+  } catch {
+    await Promise.all(ids.map((id) => deleteMessage(token, id).catch(() => {})));
   }
 }
 
@@ -946,15 +868,22 @@ export async function scanAttachments(
   attachments: EmailAttachment[];
   scannedCount: number;
   nextPageToken?: string;
+  quotaWarning?: boolean;
 }> {
+  if (!token || !token.trim()) {
+    return { attachments: [], scannedCount: 0 };
+  }
+
   const baseQuery = 'has:attachment';
   const query = options.searchQuery
     ? `${baseQuery} ${options.searchQuery}`
     : baseQuery;
 
+  const maxMsgs = options.maxMessages || 15;
+
   const url = new URL(`${GMAIL_BASE}/messages`);
   url.searchParams.set('q', query);
-  url.searchParams.set('maxResults', String(options.maxMessages || 30));
+  url.searchParams.set('maxResults', String(maxMsgs));
   if (options.pageToken) {
     url.searchParams.set('pageToken', options.pageToken);
   }
@@ -967,6 +896,9 @@ export async function scanAttachments(
     const errJson = await res.json().catch(() => null);
     const msg = errJson?.error?.message || `Échec de la recherche de pièces jointes (${res.status})`;
     notifyIfAuthError(res.status, msg);
+    if (res.status === 429 || msg.toLowerCase().includes('quota')) {
+      throw new Error('Quota Google API temporairement atteint. Veuillez réessayer dans un instant.');
+    }
     throw new Error(msg);
   }
 
@@ -977,18 +909,29 @@ export async function scanAttachments(
     return { attachments: [], scannedCount: 0, nextPageToken: data.nextPageToken };
   }
 
-  // Fetch full messages in parallel chunks of 8
-  const CHUNK_SIZE = 8;
+  // Fetch full messages in small controlled chunks (4 at a time with brief pause)
+  const CHUNK_SIZE = 4;
   const allAttachments: EmailAttachment[] = [];
+  let quotaHit = false;
 
   for (let i = 0; i < messagesList.length; i += CHUNK_SIZE) {
+    if (quotaHit) break;
     const chunk = messagesList.slice(i, i + CHUNK_SIZE);
+
+    if (i > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+
     const results = await Promise.allSettled(
       chunk.map(async (m) => {
         const msgRes = await fetch(`${GMAIL_BASE}/messages/${m.id}?format=full`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!msgRes.ok) return null;
+        if (!msgRes.ok) {
+          if (msgRes.status === 429) quotaHit = true;
+          notifyIfAuthError(msgRes.status);
+          return null;
+        }
         const rawMsg: GmailRawMessage = await msgRes.json();
         return parseRawMessage(rawMsg);
       })
@@ -1005,5 +948,6 @@ export async function scanAttachments(
     attachments: allAttachments,
     scannedCount: messagesList.length,
     nextPageToken: data.nextPageToken,
+    quotaWarning: quotaHit,
   };
 }

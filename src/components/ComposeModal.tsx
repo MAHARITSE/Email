@@ -310,6 +310,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
             onChange={setTo}
             placeholder="destinataire@exemple.com (saisir pour suggestions...)"
             autoFocus
+            currentUserEmail={currentUserEmail}
           />
           <div className={`flex items-center gap-2 text-xs font-mono ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
             {!showCc && (
@@ -342,6 +343,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               value={cc}
               onChange={setCc}
               placeholder="cc@exemple.com (suggestions automatiques...)"
+              currentUserEmail={currentUserEmail}
             />
           </div>
         )}
@@ -355,6 +357,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
               value={bcc}
               onChange={setBcc}
               placeholder="cci@exemple.com (suggestions automatiques...)"
+              currentUserEmail={currentUserEmail}
             />
           </div>
         )}

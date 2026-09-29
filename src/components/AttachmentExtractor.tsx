@@ -23,6 +23,8 @@ import {
   User,
   Sparkles,
   ArrowRight,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { EmailAttachment } from '../types/gmail';
 import { useTheme } from '../context/ThemeContext';
@@ -102,152 +104,185 @@ const ImageThumbnail: React.FC<{
     <img
       src={srcUrl}
       alt={attachment.filename}
-      className={`object-cover rounded-lg w-full h-full ${className}`}
-      loading="lazy"
+      className={`w-full h-full object-cover ${className}`}
     />
   );
 };
 
-interface AttachmentExtractorProps {
-  token: string;
-  onOpenEmail?: (messageId: string) => void;
-}
-
-type FileCategory = 'all' | 'documents' | 'spreadsheets' | 'images' | 'archives' | 'other';
-type SortField = 'date' | 'size' | 'name';
-type SortOrder = 'desc' | 'asc';
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 Ko';
-  const k = 1024;
-  const sizes = ['Octets', 'Ko', 'Mo', 'Go'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  const val = bytes / Math.pow(k, i);
-  return `${val.toFixed(i > 1 ? 1 : 0)} ${sizes[i]}`;
-}
+export type FileCategory = 'all' | 'documents' | 'spreadsheets' | 'images' | 'archives' | 'other';
 
 function getFileCategory(filename: string, mimeType: string): FileCategory {
-  const ext = filename.split('.').pop()?.toLowerCase() || '';
+  const lowerName = (filename || '').toLowerCase();
+  const lowerMime = (mimeType || '').toLowerCase();
+
   if (
-    ['pdf', 'doc', 'docx', 'txt', 'rtf', 'odt'].includes(ext) ||
-    mimeType.includes('pdf') ||
-    mimeType.includes('word') ||
-    mimeType.includes('text/')
+    lowerName.endsWith('.pdf') ||
+    lowerName.endsWith('.doc') ||
+    lowerName.endsWith('.docx') ||
+    lowerName.endsWith('.txt') ||
+    lowerMime.includes('pdf') ||
+    lowerMime.includes('word')
   ) {
     return 'documents';
   }
+
   if (
-    ['xls', 'xlsx', 'csv', 'ods', 'tsv'].includes(ext) ||
-    mimeType.includes('sheet') ||
-    mimeType.includes('excel') ||
-    mimeType.includes('csv')
+    lowerName.endsWith('.xls') ||
+    lowerName.endsWith('.xlsx') ||
+    lowerName.endsWith('.csv') ||
+    lowerMime.includes('spreadsheet') ||
+    lowerMime.includes('excel') ||
+    lowerMime.includes('csv')
   ) {
     return 'spreadsheets';
   }
+
   if (
-    ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff'].includes(ext) ||
-    mimeType.startsWith('image/')
+    lowerName.endsWith('.png') ||
+    lowerName.endsWith('.jpg') ||
+    lowerName.endsWith('.jpeg') ||
+    lowerName.endsWith('.webp') ||
+    lowerName.endsWith('.gif') ||
+    lowerName.endsWith('.svg') ||
+    lowerMime.startsWith('image/')
   ) {
     return 'images';
   }
+
   if (
-    ['zip', 'rar', '7z', 'tar', 'gz'].includes(ext) ||
-    mimeType.includes('zip') ||
-    mimeType.includes('compressed')
+    lowerName.endsWith('.zip') ||
+    lowerName.endsWith('.rar') ||
+    lowerName.endsWith('.tar') ||
+    lowerName.endsWith('.gz') ||
+    lowerName.endsWith('.7z') ||
+    lowerMime.includes('zip') ||
+    lowerMime.includes('tar') ||
+    lowerMime.includes('archive')
   ) {
     return 'archives';
   }
+
   return 'other';
 }
 
-function getFileIcon(category: FileCategory) {
-  switch (category) {
+function formatBytes(bytes: number, decimals = 1) {
+  if (!bytes || bytes === 0) return '0 o';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['o', 'Ko', 'Mo', 'Go'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+function getFileIcon(cat: FileCategory) {
+  switch (cat) {
     case 'documents':
-      return <FileText className="w-5 h-5 text-red-500" />;
+      return <FileText className="w-5 h-5 text-rose-400" />;
     case 'spreadsheets':
-      return <FileSpreadsheet className="w-5 h-5 text-emerald-500" />;
+      return <FileSpreadsheet className="w-5 h-5 text-emerald-400" />;
     case 'images':
-      return <ImageIcon className="w-5 h-5 text-violet-500" />;
+      return <ImageIcon className="w-5 h-5 text-violet-400" />;
     case 'archives':
-      return <FileArchive className="w-5 h-5 text-amber-500" />;
+      return <FileArchive className="w-5 h-5 text-amber-400" />;
     default:
-      return <File className="w-5 h-5 text-cyan-500" />;
+      return <File className="w-5 h-5 text-slate-400" />;
   }
+}
+
+interface AttachmentExtractorProps {
+  token: string;
+  onOpenEmail?: (messageId: string) => void;
+  currentUserEmail?: string;
 }
 
 export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
   token,
   onOpenEmail,
+  currentUserEmail,
 }) => {
   const { isDark } = useTheme();
 
   // Search & Filter state
-  const [senderQuery, setSenderQuery] = useState<string>('');
-  const [keywordQuery, setKeywordQuery] = useState<string>('');
-  const [hasSearched, setHasSearched] = useState<boolean>(false);
-  const [senderSuggestions, setSenderSuggestions] = useState<LocalContact[]>([]);
-  const [isSenderFocused, setIsSenderFocused] = useState<boolean>(false);
-
-  // Attachment list state
-  const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [senderQuery, setSenderQuery] = useState('');
+  const [keywordQuery, setKeywordQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<FileCategory>('all');
-  const [sortField, setSortField] = useState<SortField>('date');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [sortField, setSortField] = useState<'date' | 'size' | 'name'>('date');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [isFilterExpandedMobile, setIsFilterExpandedMobile] = useState(false);
 
-  // Download states
+  // Contact autocomplete for sender input
+  const [senderSuggestions, setSenderSuggestions] = useState<LocalContact[]>([]);
+  const [isSenderFocused, setIsSenderFocused] = useState(false);
+
+  // Data & loading states
+  const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Operations
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [isZipping, setIsZipping] = useState<boolean>(false);
+  const [isZipping, setIsZipping] = useState(false);
   const [zipProgress, setZipProgress] = useState<{ current: number; total: number; filename: string } | null>(null);
 
-  // Document Preview Modal states
+  // Rich preview state
   const [previewAttachment, setPreviewAttachment] = useState<EmailAttachment | null>(null);
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [previewArrayBuffer, setPreviewArrayBuffer] = useState<ArrayBuffer | null>(null);
-  const [isLoadingPreview, setIsLoadingPreview] = useState<boolean>(false);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  // Auto-suggest contacts when typing sender
+  // Auto-scan recent attachments on initial mount if token is available and search hasn't run
+  useEffect(() => {
+    if (token && !hasSearched && attachments.length === 0 && !isLoading) {
+      executeSearch('');
+    }
+  }, [token]);
+
   const handleSenderChange = (val: string) => {
     setSenderQuery(val);
     if (val.trim()) {
-      setSenderSuggestions(suggestContacts(val, 5));
+      setSenderSuggestions(suggestContacts(val, 4));
     } else {
-      setSenderSuggestions(suggestContacts('', 4));
+      setSenderSuggestions([]);
     }
   };
 
   const handleSelectSuggestedContact = (contact: LocalContact) => {
     setSenderQuery(contact.email);
-    setSenderSuggestions([]);
     setIsSenderFocused(false);
-    // Trigger search directly with this sender
-    executeSearch(contact.email, keywordQuery);
+    setSenderSuggestions([]);
+    executeSearch(contact.email);
   };
 
-  // Perform search (on-demand, not on initial mount!)
-  const executeSearch = async (sender = senderQuery, keyword = keywordQuery) => {
+  // Main search function
+  const executeSearch = async (overrideSender?: string) => {
+    if (!token) {
+      setError('Veuillez vous connecter à votre compte Google pour rechercher les pièces jointes.');
+      return;
+    }
+
+    const targetSender = overrideSender !== undefined ? overrideSender : senderQuery;
+    setIsLoading(true);
+    setError(null);
+    setHasSearched(true);
+    setIsFilterExpandedMobile(false);
+
     try {
-      setIsLoading(true);
-      setError(null);
-      setHasSearched(true);
-
-      let queryParts: string[] = ['has:attachment'];
-      if (sender.trim()) {
-        queryParts.push(`from:(${sender.trim()})`);
+      const queryParts: string[] = [];
+      if (targetSender.trim()) {
+        queryParts.push(`from:${targetSender.trim()}`);
       }
-      if (keyword.trim()) {
-        queryParts.push(keyword.trim());
+      if (keywordQuery.trim()) {
+        queryParts.push(keywordQuery.trim());
       }
-
-      const queryString = queryParts.join(' ');
+      const combinedQuery = queryParts.join(' ');
 
       const res = await scanAttachments(token, {
-        searchQuery: queryString,
-        maxMessages: 40,
+        searchQuery: combinedQuery || undefined,
+        maxMessages: 15,
       });
 
       setAttachments(res.attachments);
@@ -296,7 +331,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
     } catch (e: any) {
       console.warn('Could not load preview bytes:', e);
       setPreviewError(
-        e?.message || 'Impossible de récupérer cette pièce jointe depuis Gmail. Vérifiez votre connexion puis réessayez.'
+        e?.message || 'Impossible de récupérer cette pièce jointe depuis Gmail.'
       );
     } finally {
       setIsLoadingPreview(false);
@@ -389,56 +424,75 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
     return counts;
   }, [attachments]);
 
-  const totalSelectedSize = useMemo(() => {
-    return attachments
-      .filter((a) => selectedIds.has(a.id))
-      .reduce((acc, curr) => acc + (curr.size || 0), 0);
-  }, [attachments, selectedIds]);
-
   return (
     <div
-      className={`h-full flex flex-col overflow-hidden select-none transition-colors ${
+      className={`h-full flex flex-col min-h-0 overflow-hidden select-none transition-colors relative ${
         isDark ? 'bg-[#05070A] text-slate-200' : 'bg-[#F8FAFC] text-slate-800'
       }`}
       id="attachment-extractor-root"
     >
-      {/* Top Banner / Header */}
+      {/* Top Banner / Header (Compact on mobile) */}
       <div
-        className={`px-6 py-4 border-b shrink-0 flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+        className={`px-3 py-2.5 sm:px-6 sm:py-3.5 border-b shrink-0 flex items-center justify-between gap-2 transition-colors ${
           isDark
             ? 'bg-[#080B10] border-slate-800/80 shadow-xs'
             : 'bg-white border-slate-200 shadow-xs'
         }`}
       >
-        <div className="flex items-center gap-3.5">
-          <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-            <FolderArchive className="w-5 h-5" />
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          <div className="p-2 sm:p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shrink-0 shadow-[0_0_10px_rgba(34,211,238,0.2)]">
+            <FolderArchive className="w-4 h-4 sm:w-5 sm:h-5" />
           </div>
-          <div>
-            <h1 className="text-base font-bold tracking-tight">Extracteur de Pièces Jointes</h1>
-            <p className={`text-xs font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              Recherche ciblée par expéditeur • Aperçu multi-format (PDF, Word, Excel) • Export ZIP
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h1 className="text-xs sm:text-base font-bold tracking-tight truncate">
+                Extracteur de Pièces Jointes
+              </h1>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shrink-0">
+                {attachments.length} trouvés
+              </span>
+            </div>
+            <p className={`hidden sm:block text-xs font-mono truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              Extraction • Aperçu multi-format (PDF, Excel, Images) • Export ZIP
             </p>
           </div>
         </div>
 
-        {/* Global actions */}
-        {hasSearched && attachments.length > 0 && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => executeSearch()}
-              disabled={isLoading}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition border ${
-                isDark
-                  ? 'bg-slate-900 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800'
-                  : 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-cyan-400' : ''}`} />
-              <span>Actualiser</span>
-            </button>
+        {/* Global actions (Desktop & Tablet) */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => executeSearch()}
+            disabled={isLoading}
+            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition border cursor-pointer ${
+              isDark
+                ? 'bg-slate-900 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800'
+                : 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+            }`}
+            title="Actualiser la recherche"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-cyan-400' : ''}`} />
+            <span className="hidden sm:inline">Actualiser</span>
+          </button>
 
+          {/* Toggle Mobile Search Filter Drawer */}
+          <button
+            type="button"
+            onClick={() => setIsFilterExpandedMobile(!isFilterExpandedMobile)}
+            className={`sm:hidden inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+              isFilterExpandedMobile
+                ? 'bg-cyan-600 text-white border-cyan-500'
+                : isDark
+                ? 'bg-slate-900 border-slate-700 text-slate-300'
+                : 'bg-slate-100 border-slate-300 text-slate-700'
+            }`}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            <span>Filtres</span>
+            {isFilterExpandedMobile ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
+
+          {sortedAttachments.length > 0 && (
             <button
               type="button"
               onClick={() =>
@@ -449,30 +503,29 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                 )
               }
               disabled={isZipping || sortedAttachments.length === 0}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white shadow-xs transition active:scale-95 disabled:opacity-50"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white shadow-xs transition active:scale-95 disabled:opacity-50 cursor-pointer"
             >
               <FolderArchive className="w-3.5 h-3.5" />
               <span>
                 {selectedIds.size > 0
-                  ? `Télécharger sélection (${selectedIds.size})`
+                  ? `ZIP sélection (${selectedIds.size})`
                   : `Tout télécharger en ZIP (${sortedAttachments.length})`}
               </span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* ZIP Download Progress overlay bar */}
+      {/* ZIP Download Progress bar */}
       {isZipping && zipProgress && (
-        <div className="bg-cyan-500/10 border-b border-cyan-500/30 px-6 py-2.5 flex items-center justify-between text-xs font-mono text-cyan-400">
-          <div className="flex items-center gap-3">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>
-              Création du ZIP en cours : {zipProgress.current} / {zipProgress.total} fichier(s) (
-              {zipProgress.filename})
+        <div className="bg-cyan-500/15 border-b border-cyan-500/40 px-3 sm:px-6 py-2 flex items-center justify-between text-xs font-mono text-cyan-300 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-cyan-400" />
+            <span className="truncate">
+              ZIP : {zipProgress.current} / {zipProgress.total} fichier(s) ({zipProgress.filename})
             </span>
           </div>
-          <div className="w-32 bg-slate-800 rounded-full h-2 overflow-hidden">
+          <div className="w-24 sm:w-32 bg-slate-800 rounded-full h-1.5 overflow-hidden shrink-0 ml-2">
             <div
               className="bg-cyan-400 h-full transition-all duration-200"
               style={{ width: `${(zipProgress.current / zipProgress.total) * 100}%` }}
@@ -481,28 +534,28 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
         </div>
       )}
 
-      {/* Search & Filter Bar (Targeted, doesn't auto-overload) */}
+      {/* Search & Filter Bar (Adaptive & Collapsible on mobile) */}
       <div
-        className={`px-6 py-4 border-b shrink-0 ${
-          isDark ? 'bg-[#0B0F17] border-slate-800/80' : 'bg-slate-50 border-slate-200'
-        }`}
+        className={`px-3 py-2 sm:px-6 sm:py-3 border-b shrink-0 transition-colors ${
+          !isFilterExpandedMobile ? 'hidden sm:block' : 'block'
+        } ${isDark ? 'bg-[#0B0F17] border-slate-800/80' : 'bg-slate-50 border-slate-200'}`}
       >
-        <form onSubmit={handleFormSubmit} className="flex flex-col sm:flex-row items-stretch gap-3">
+        <form onSubmit={handleFormSubmit} className="flex flex-col sm:flex-row items-stretch gap-2">
           {/* Sender Input with contact auto-suggestions */}
           <div className="relative flex-1">
-            <div className="absolute left-3.5 top-2.5 text-slate-400">
-              <User className="w-4 h-4" />
+            <div className="absolute left-3 top-2.5 text-slate-400">
+              <User className="w-3.5 h-3.5" />
             </div>
             <input
               type="text"
-              placeholder="Expéditeur (ex: jean@entreprise.com ou nom)..."
+              placeholder="Expéditeur (ex: contact@email.com ou nom)..."
               value={senderQuery}
               onChange={(e) => handleSenderChange(e.target.value)}
               onFocus={() => {
                 setIsSenderFocused(true);
                 setSenderSuggestions(suggestContacts(senderQuery, 4));
               }}
-              className={`w-full pl-10 pr-4 py-2 text-xs rounded-xl border outline-none transition ${
+              className={`w-full pl-9 pr-4 py-1.5 sm:py-2 text-xs rounded-xl border outline-none transition ${
                 isDark
                   ? 'bg-slate-900/90 border-slate-700 text-white placeholder-slate-500 focus:border-cyan-400'
                   : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-cyan-600'
@@ -512,37 +565,33 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
             {/* Suggestions dropdown */}
             {isSenderFocused && senderSuggestions.length > 0 && (
               <div
-                className={`absolute left-0 right-0 top-full mt-1.5 z-40 rounded-xl shadow-2xl border overflow-hidden ${
-                  isDark ? 'bg-[#0E131F] border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'
+                className={`absolute left-0 right-0 top-full mt-1 z-50 rounded-xl shadow-2xl border overflow-hidden backdrop-blur-md ${
+                  isDark ? 'bg-[#0E131F]/95 border-slate-700 text-slate-200' : 'bg-white/95 border-slate-300 text-slate-800'
                 }`}
               >
-                <div className="p-1.5">
-                  <div className={`px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                <div className="p-1">
+                  <div className={`px-2 py-0.5 text-[9px] font-mono uppercase tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                     Contacts suggérés
                   </div>
                   {senderSuggestions.map((c) => (
                     <div
                       key={c.id}
                       onMouseDown={() => handleSelectSuggestedContact(c)}
-                      className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition ${
+                      className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition ${
                         isDark ? 'hover:bg-slate-800' : 'hover:bg-slate-100'
                       }`}
                     >
                       <div className="min-w-0 pr-2">
                         <p className="text-xs font-semibold truncate">{c.name}</p>
-                        <p className={`text-[11px] font-mono truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        <p className={`text-[10px] font-mono truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                           {c.email}
                         </p>
                       </div>
                       <span
-                        className={`text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded ${
+                        className={`text-[9px] font-mono px-1.5 py-0.2 rounded shrink-0 ${
                           c.category === 'pro'
-                            ? isDark
-                              ? 'bg-cyan-500/15 text-cyan-400'
-                              : 'bg-blue-50 text-blue-700'
-                            : isDark
-                            ? 'bg-emerald-500/15 text-emerald-400'
-                            : 'bg-emerald-50 text-emerald-700'
+                            ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
+                            : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                         }`}
                       >
                         {c.category === 'pro' ? 'Pro' : 'Perso'}
@@ -555,16 +604,16 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
           </div>
 
           {/* Keyword / File type Input */}
-          <div className="relative sm:w-64">
-            <div className="absolute left-3.5 top-2.5 text-slate-400">
-              <Search className="w-4 h-4" />
+          <div className="relative sm:w-56">
+            <div className="absolute left-3 top-2.5 text-slate-400">
+              <Search className="w-3.5 h-3.5" />
             </div>
             <input
               type="text"
               placeholder="Nom de fichier, mot-clé..."
               value={keywordQuery}
               onChange={(e) => setKeywordQuery(e.target.value)}
-              className={`w-full pl-10 pr-4 py-2 text-xs rounded-xl border outline-none transition ${
+              className={`w-full pl-9 pr-4 py-1.5 sm:py-2 text-xs rounded-xl border outline-none transition ${
                 isDark
                   ? 'bg-slate-900/90 border-slate-700 text-white placeholder-slate-500 focus:border-cyan-400'
                   : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-cyan-600'
@@ -576,154 +625,157 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
           <button
             type="submit"
             disabled={isLoading}
-            className="inline-flex items-center justify-center gap-2 px-5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white shadow-xs transition active:scale-95 disabled:opacity-50 shrink-0"
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 sm:py-2 rounded-xl text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white shadow-xs transition active:scale-95 disabled:opacity-50 shrink-0 cursor-pointer"
           >
-            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             <span>Extraire</span>
           </button>
         </form>
-
-        {/* Category Pills Bar (when search is loaded) */}
-        {hasSearched && (
-          <div className="flex flex-wrap items-center justify-between gap-3 mt-3 pt-3 border-t border-slate-700/30">
-            <div className="flex items-center gap-1.5 overflow-x-auto">
-              {(
-                [
-                  { id: 'all', label: 'Tous', icon: FolderArchive },
-                  { id: 'documents', label: 'Documents', icon: FileText },
-                  { id: 'spreadsheets', label: 'Tableurs Excel', icon: FileSpreadsheet },
-                  { id: 'images', label: 'Images', icon: ImageIcon },
-                  { id: 'archives', label: 'Archives', icon: FileArchive },
-                ] as const
-              ).map((cat) => {
-                const Icon = cat.icon;
-                const count = categoryCounts[cat.id];
-                const isActive = activeCategory === cat.id;
-
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => setActiveCategory(cat.id)}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition shrink-0 ${
-                      isActive
-                        ? 'bg-cyan-600 text-white shadow-xs'
-                        : isDark
-                        ? 'bg-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                        : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    <span>{cat.label}</span>
-                    <span
-                      className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                        isActive
-                          ? 'bg-cyan-700 text-white'
-                          : isDark
-                          ? 'bg-slate-700 text-slate-300'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* View Mode & Sorting */}
-            <div className="flex items-center gap-2">
-              <div className="flex items-center bg-slate-800/20 rounded-lg p-0.5 border border-slate-700/40">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('grid')}
-                  className={`p-1.5 rounded-md transition ${
-                    viewMode === 'grid'
-                      ? 'bg-cyan-600 text-white'
-                      : isDark
-                      ? 'text-slate-400 hover:text-white'
-                      : 'text-slate-600 hover:text-black'
-                  }`}
-                  title="Vue Grille"
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('list')}
-                  className={`p-1.5 rounded-md transition ${
-                    viewMode === 'list'
-                      ? 'bg-cyan-600 text-white'
-                      : isDark
-                      ? 'text-slate-400 hover:text-white'
-                      : 'text-slate-600 hover:text-black'
-                  }`}
-                  title="Vue Liste"
-                >
-                  <ListIcon className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
-                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-mono transition border ${
-                  isDark
-                    ? 'border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800'
-                    : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
-                }`}
-                title="Inverser le tri"
-              >
-                <ArrowUpDown className="w-3 h-3 text-cyan-400" />
-                <span>{sortOrder === 'desc' ? 'Plus récents' : 'Plus anciens'}</span>
-              </button>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Main Workspace Content Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center h-72 gap-3">
-            <Loader2 className="w-9 h-9 animate-spin text-cyan-400" />
-            <p className="text-xs font-mono text-slate-400">
-              Extraction des pièces jointes en cours depuis Gmail...
-            </p>
-          </div>
-        ) : !hasSearched ? (
-          /* Welcome state before search */
-          <div className="flex flex-col items-center justify-center min-h-[380px] max-w-lg mx-auto text-center p-8">
-            <div className="p-4 rounded-2xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 mb-4 shadow-lg">
-              <FolderArchive className="w-10 h-10" />
-            </div>
-            <h2 className="text-base font-bold mb-1.5">Extraction à la demande</h2>
-            <p className={`text-xs leading-relaxed mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              Pour préserver la légèreté et la rapidité de l'application, saisissez le nom ou l'adresse email d'un expéditeur pour cibler et extraire directement ses pièces jointes.
-            </p>
+      {/* Category Pills & View Switcher (Scrollable horizontally) */}
+      <div
+        className={`px-3 py-2 sm:px-6 sm:py-2.5 border-b shrink-0 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar ${
+          isDark ? 'bg-[#070A0F] border-slate-800' : 'bg-slate-100/80 border-slate-200'
+        }`}
+      >
+        {/* Category Pills */}
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-x-auto no-scrollbar">
+          {(
+            [
+              { id: 'all', label: 'Tous', icon: FolderArchive },
+              { id: 'documents', label: 'PDF & Docs', icon: FileText },
+              { id: 'spreadsheets', label: 'Excel & Tables', icon: FileSpreadsheet },
+              { id: 'images', label: 'Photos', icon: ImageIcon },
+              { id: 'archives', label: 'ZIP & Rars', icon: FileArchive },
+            ] as const
+          ).map((cat) => {
+            const Icon = cat.icon;
+            const count = categoryCounts[cat.id];
+            const isActive = activeCategory === cat.id;
 
-            <div className="flex flex-wrap items-center justify-center gap-2">
+            return (
               <button
+                key={cat.id}
                 type="button"
-                onClick={() => executeSearch('')}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white shadow-xs transition active:scale-95"
+                onClick={() => setActiveCategory(cat.id)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition shrink-0 cursor-pointer select-none ${
+                  isActive
+                    ? 'bg-cyan-600 text-white shadow-xs font-semibold'
+                    : isDark
+                    ? 'bg-slate-900/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800/80 border border-slate-800'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
               >
-                <span>Scanner tous les e-mails récents</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                <span className="whitespace-nowrap">{cat.label}</span>
+                <span
+                  className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full shrink-0 ${
+                    isActive
+                      ? 'bg-cyan-700 text-white'
+                      : isDark
+                      ? 'bg-slate-800 text-slate-300'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {count}
+                </span>
               </button>
-            </div>
+            );
+          })}
+        </div>
+
+        {/* View Mode & Sorting */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => toggleSelectAll(sortedAttachments)}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition border cursor-pointer ${
+              selectedIds.size > 0 && selectedIds.size === sortedAttachments.length
+                ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/40'
+                : isDark
+                ? 'border-slate-800 bg-slate-900/60 text-slate-400 hover:text-slate-200'
+                : 'border-slate-300 bg-white text-slate-600 hover:text-slate-900'
+            }`}
+            title="Tout sélectionner"
+          >
+            {selectedIds.size === sortedAttachments.length && sortedAttachments.length > 0 ? (
+              <CheckSquare className="w-3.5 h-3.5 text-cyan-400" />
+            ) : (
+              <Square className="w-3.5 h-3.5" />
+            )}
+            <span className="hidden sm:inline">Tout</span>
+          </button>
+
+          <div className="flex items-center bg-slate-800/30 rounded-lg p-0.5 border border-slate-700/40">
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              className={`p-1 rounded-md transition cursor-pointer ${
+                viewMode === 'grid'
+                  ? 'bg-cyan-600 text-white'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white'
+                  : 'text-slate-600 hover:text-black'
+              }`}
+              title="Vue Grille"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={`p-1 rounded-md transition cursor-pointer ${
+                viewMode === 'list'
+                  ? 'bg-cyan-600 text-white'
+                  : isDark
+                  ? 'text-slate-400 hover:text-white'
+                  : 'text-slate-600 hover:text-black'
+              }`}
+              title="Vue Liste"
+            >
+              <ListIcon className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-mono transition border cursor-pointer ${
+              isDark
+                ? 'border-slate-800 bg-slate-900/60 text-slate-300 hover:bg-slate-800'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100'
+            }`}
+            title="Inverser le tri"
+          >
+            <ArrowUpDown className="w-3 h-3 text-cyan-400" />
+            <span className="hidden sm:inline">
+              {sortOrder === 'desc' ? 'Récents' : 'Anciens'}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Workspace Scrollable Content Area */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-2.5 sm:p-6 pb-24 sm:pb-6">
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center h-64 gap-3">
+            <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
+            <p className="text-xs font-mono text-slate-400">
+              Extraction des pièces jointes depuis Gmail...
+            </p>
           </div>
         ) : sortedAttachments.length === 0 ? (
-          <div className="text-center py-20">
+          <div className="text-center py-16 px-4">
             <File className="w-12 h-12 text-slate-500 mx-auto mb-3 opacity-40" />
             <h3 className="text-sm font-semibold mb-1">Aucune pièce jointe trouvée</h3>
             <p className={`text-xs max-w-sm mx-auto ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              Aucun document ne correspond aux critères de recherche spécifiés.
+              Aucun fichier ne correspond à votre filtre. Modifiez les critères ou actualisez.
             </p>
           </div>
         ) : viewMode === 'grid' ? (
-          /* Grid View */
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          /* Responsive Grid View */
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-4">
             {sortedAttachments.map((att) => {
               const isSelected = selectedIds.has(att.id);
               const cat = getFileCategory(att.filename, att.mimeType);
@@ -732,20 +784,20 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
               return (
                 <div
                   key={att.id}
-                  className={`group relative flex flex-col justify-between p-4 rounded-xl border transition ${
+                  className={`group relative flex flex-col justify-between p-3 sm:p-4 rounded-xl border transition ${
                     isSelected
                       ? isDark
-                        ? 'bg-cyan-950/20 border-cyan-500/50 shadow-[0_0_12px_rgba(34,211,238,0.1)]'
-                        : 'bg-cyan-50 border-cyan-300'
+                        ? 'bg-cyan-950/30 border-cyan-500/60 shadow-[0_0_12px_rgba(34,211,238,0.15)] ring-1 ring-cyan-500/40'
+                        : 'bg-cyan-50 border-cyan-400 ring-1 ring-cyan-400/30'
                       : isDark
                       ? 'bg-[#0B0F17] border-slate-800/80 hover:border-slate-700 hover:bg-[#0E131F]'
                       : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50 shadow-xs'
                   }`}
                 >
                   <div>
-                    {/* Header: Image Thumbnail or Icon + Select Checkbox */}
+                    {/* Header: Thumbnail or Icon + Selection Checkbox */}
                     {cat === 'images' ? (
-                      <div className="relative w-full h-36 mb-3 rounded-lg overflow-hidden border border-slate-700/50 bg-slate-900/80 group/img">
+                      <div className="relative w-full h-32 sm:h-36 mb-2 sm:mb-3 rounded-lg overflow-hidden border border-slate-700/50 bg-slate-900/80 group/img">
                         <ImageThumbnail token={token} attachment={att} isDark={isDark} />
                         <div
                           onClick={() => handleOpenPreview(att)}
@@ -761,7 +813,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                             e.stopPropagation();
                             toggleSelect(att.id);
                           }}
-                          className={`absolute top-2 right-2 p-1.5 rounded-lg backdrop-blur-md transition ${
+                          className={`absolute top-2 right-2 p-1.5 rounded-lg backdrop-blur-md transition cursor-pointer ${
                             isSelected
                               ? 'bg-cyan-500 text-slate-950 font-bold'
                               : 'bg-black/60 text-white hover:bg-black/80'
@@ -772,14 +824,14 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                         </button>
                       </div>
                     ) : (
-                      <div className="flex items-start justify-between gap-2 mb-3">
-                        <div className="p-2.5 rounded-xl bg-slate-800/30 border border-slate-700/40 shrink-0">
+                      <div className="flex items-start justify-between gap-2 mb-2 sm:mb-3">
+                        <div className="p-2 sm:p-2.5 rounded-xl bg-slate-800/30 border border-slate-700/40 shrink-0">
                           {getFileIcon(cat)}
                         </div>
                         <button
                           type="button"
                           onClick={() => toggleSelect(att.id)}
-                          className={`p-1 rounded-md transition ${
+                          className={`p-1.5 rounded-md transition cursor-pointer ${
                             isSelected ? 'text-cyan-400' : 'text-slate-500 hover:text-slate-300'
                           }`}
                           title={isSelected ? 'Désélectionner' : 'Sélectionner'}
@@ -796,7 +848,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                     >
                       {att.filename}
                     </h3>
-                    <p className={`text-[11px] font-mono mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    <p className={`text-[11px] font-mono mb-1.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                       {formatBytes(att.size)} • {att.dateStr}
                     </p>
 
@@ -812,11 +864,11 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                   </div>
 
                   {/* Actions Footer */}
-                  <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-700/30">
+                  <div className="flex items-center justify-between gap-2 mt-3 pt-2.5 border-t border-slate-700/30">
                     <button
                       type="button"
                       onClick={() => handleOpenPreview(att)}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
                         isDark
                           ? 'bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
                           : 'bg-cyan-50 text-cyan-700 hover:bg-cyan-100'
@@ -831,7 +883,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                         <button
                           type="button"
                           onClick={() => onOpenEmail(att.messageId)}
-                          className={`p-1.5 rounded-lg transition ${
+                          className={`p-1.5 rounded-lg transition cursor-pointer ${
                             isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-black'
                           }`}
                           title="Voir le message original"
@@ -844,7 +896,7 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
                         type="button"
                         onClick={() => handleDownload(att)}
                         disabled={isDownloading}
-                        className={`p-1.5 rounded-lg transition ${
+                        className={`p-1.5 rounded-lg transition cursor-pointer ${
                           isDark ? 'text-slate-400 hover:text-cyan-400' : 'text-slate-500 hover:text-cyan-600'
                         }`}
                         title="Télécharger ce fichier"
@@ -862,131 +914,135 @@ export const AttachmentExtractor: React.FC<AttachmentExtractorProps> = ({
             })}
           </div>
         ) : (
-          /* List View */
-          <div
-            className={`rounded-xl border overflow-hidden ${
-              isDark ? 'bg-[#0B0F17] border-slate-800' : 'bg-white border-slate-200 shadow-xs'
-            }`}
-          >
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className={isDark ? 'bg-slate-900/60 border-b border-slate-800' : 'bg-slate-100 border-b border-slate-200'}>
-                  <th className="p-3 w-10 text-center">
+          /* Responsive List View */
+          <div className="space-y-2">
+            {sortedAttachments.map((att) => {
+              const isSelected = selectedIds.has(att.id);
+              const cat = getFileCategory(att.filename, att.mimeType);
+              const isDownloading = downloadingId === att.id;
+
+              return (
+                <div
+                  key={att.id}
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 sm:p-3 rounded-xl border gap-2 transition ${
+                    isSelected
+                      ? isDark
+                        ? 'bg-cyan-950/30 border-cyan-500/50'
+                        : 'bg-cyan-50 border-cyan-400'
+                      : isDark
+                      ? 'bg-[#0B0F17] border-slate-800 hover:border-slate-700'
+                      : 'bg-white border-slate-200 hover:border-slate-300 shadow-xs'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <button
                       type="button"
-                      onClick={() => toggleSelectAll(sortedAttachments)}
-                      className="text-slate-400 hover:text-white"
-                    >
-                      {selectedIds.size === sortedAttachments.length && sortedAttachments.length > 0 ? (
-                        <CheckSquare className="w-4 h-4 text-cyan-400" />
-                      ) : (
-                        <Square className="w-4 h-4" />
-                      )}
-                    </button>
-                  </th>
-                  <th className="p-3 font-semibold">Document</th>
-                  <th className="p-3 font-semibold hidden sm:table-cell">Objet Email</th>
-                  <th className="p-3 font-semibold hidden md:table-cell">Expéditeur</th>
-                  <th className="p-3 font-semibold hidden lg:table-cell">Taille</th>
-                  <th className="p-3 font-semibold">Date</th>
-                  <th className="p-3 text-right font-semibold">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedAttachments.map((att) => {
-                  const isSelected = selectedIds.has(att.id);
-                  const cat = getFileCategory(att.filename, att.mimeType);
-                  const isDownloading = downloadingId === att.id;
-
-                  return (
-                    <tr
-                      key={att.id}
-                      className={`border-b transition ${
-                        isSelected
-                          ? isDark
-                            ? 'bg-cyan-950/20'
-                            : 'bg-cyan-50'
-                          : isDark
-                          ? 'border-slate-800/60 hover:bg-slate-900/40'
-                          : 'border-slate-100 hover:bg-slate-50'
+                      onClick={() => toggleSelect(att.id)}
+                      className={`p-1 rounded-md transition cursor-pointer shrink-0 ${
+                        isSelected ? 'text-cyan-400' : 'text-slate-500 hover:text-slate-300'
                       }`}
                     >
-                      <td className="p-3 text-center">
-                        <button
-                          type="button"
-                          onClick={() => toggleSelect(att.id)}
-                          className={isSelected ? 'text-cyan-400' : 'text-slate-400'}
-                        >
-                          {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
-                        </button>
-                      </td>
-                      <td className="p-3">
-                        <div className="flex items-center gap-3">
-                          {cat === 'images' ? (
-                            <div
-                              onClick={() => handleOpenPreview(att)}
-                              className="w-10 h-10 rounded-lg overflow-hidden shrink-0 border border-slate-700/60 bg-slate-900 cursor-pointer hover:ring-2 hover:ring-cyan-400 transition"
-                              title="Cliquer pour afficher l'aperçu"
-                            >
-                              <ImageThumbnail token={token} attachment={att} isDark={isDark} />
-                            </div>
-                          ) : (
-                            getFileIcon(cat)
-                          )}
-                          <span className="font-semibold truncate max-w-xs" title={att.filename}>
-                            {att.filename}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="p-3 hidden sm:table-cell text-slate-400 truncate max-w-xs">
-                        {att.emailSubject || '(Sans objet)'}
-                      </td>
-                      <td className="p-3 hidden md:table-cell font-mono text-[11px] text-slate-400 truncate max-w-xs">
-                        {att.fromName || att.fromEmail}
-                      </td>
-                      <td className="p-3 hidden lg:table-cell font-mono text-[11px] text-slate-400">
-                        {formatBytes(att.size)}
-                      </td>
-                      <td className="p-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
-                        {att.dateStr}
-                      </td>
-                      <td className="p-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenPreview(att)}
-                            className={`p-1.5 rounded-lg transition ${
-                              isDark ? 'text-cyan-400 hover:bg-cyan-500/10' : 'text-cyan-700 hover:bg-cyan-50'
-                            }`}
-                            title="Aperçu"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDownload(att)}
-                            disabled={isDownloading}
-                            className={`p-1.5 rounded-lg transition ${
-                              isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-black'
-                            }`}
-                            title="Télécharger"
-                          >
-                            {isDownloading ? (
-                              <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
-                            ) : (
-                              <Download className="w-4 h-4" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                    </button>
+
+                    <div className="shrink-0">{getFileIcon(cat)}</div>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold truncate" title={att.filename}>
+                        {att.filename}
+                      </p>
+                      <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400 truncate">
+                        <span>{formatBytes(att.size)}</span>
+                        <span>•</span>
+                        <span>{att.dateStr}</span>
+                        <span>•</span>
+                        <span className="truncate">De : {att.fromName || att.fromEmail}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-1.5 shrink-0 pl-7 sm:pl-0">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenPreview(att)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                        isDark ? 'text-cyan-400 hover:bg-cyan-500/10' : 'text-cyan-700 hover:bg-cyan-50'
+                      }`}
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Aperçu</span>
+                    </button>
+
+                    {onOpenEmail && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenEmail(att.messageId)}
+                        className={`p-1.5 rounded-lg transition cursor-pointer ${
+                          isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-black'
+                        }`}
+                        title="Voir le message"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleDownload(att)}
+                      disabled={isDownloading}
+                      className={`p-1.5 rounded-lg transition cursor-pointer ${
+                        isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-black'
+                      }`}
+                      title="Télécharger"
+                    >
+                      {isDownloading ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
+
+      {/* Mobile Sticky Floating Bottom Action Bar */}
+      {sortedAttachments.length > 0 && (
+        <div
+          className={`sm:hidden fixed bottom-0 left-0 right-0 p-2.5 border-t backdrop-blur-md z-30 flex items-center justify-between gap-2 shadow-2xl ${
+            isDark ? 'bg-[#080B10]/95 border-slate-800' : 'bg-white/95 border-slate-200'
+          }`}
+        >
+          <div className="flex items-center gap-1.5 text-xs font-mono">
+            <span className="font-semibold text-cyan-400">
+              {selectedIds.size > 0 ? `${selectedIds.size} sélect.` : `${sortedAttachments.length} docs`}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              handleDownloadZip(
+                selectedIds.size > 0
+                  ? attachments.filter((a) => selectedIds.has(a.id))
+                  : sortedAttachments
+              )
+            }
+            disabled={isZipping || sortedAttachments.length === 0}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg transition active:scale-95 disabled:opacity-50 cursor-pointer"
+          >
+            <FolderArchive className="w-4 h-4" />
+            <span>
+              {selectedIds.size > 0
+                ? `Télécharger ZIP (${selectedIds.size})`
+                : `Tout en ZIP (${sortedAttachments.length})`}
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Multi-Format Document Preview Modal */}
       <DocumentPreviewModal

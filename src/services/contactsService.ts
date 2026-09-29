@@ -1,4 +1,5 @@
 import { ParsedEmail } from '../types/gmail';
+import { getActiveAccountEmail } from './multiAccountService';
 
 export type ContactCategory = 'pro' | 'personal';
 export type ContactDirection = 'received' | 'sent' | 'both';
@@ -19,7 +20,20 @@ export interface LocalContact {
   updatedAt: number;
 }
 
-const CONTACTS_STORAGE_KEY = 'gmail_local_contacts_v2';
+function getStorageKey(userEmail?: string): string {
+  const activeEmail = (userEmail || getActiveAccountEmail() || '').trim().toLowerCase();
+  if (activeEmail) {
+    return `gmail_contacts_v4_${activeEmail}`;
+  }
+  return 'gmail_contacts_v4_default';
+}
+
+// Purge old merged/shared storage keys once on load
+if (typeof window !== 'undefined') {
+  try {
+    localStorage.removeItem('gmail_local_contacts_v2');
+  } catch {}
+}
 
 const AVATAR_COLORS = [
   'from-cyan-500 to-blue-600',
@@ -91,12 +105,15 @@ function notifyContactsChanged() {
   }
 }
 
-export function getLocalContacts(): LocalContact[] {
+export function getLocalContacts(userEmail?: string): LocalContact[] {
+  if (typeof window === 'undefined') return [];
+  const key = getStorageKey(userEmail);
   try {
-    const raw = localStorage.getItem(CONTACTS_STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(DEFAULT_SEEDED_CONTACTS));
-      return DEFAULT_SEEDED_CONTACTS;
+      // Clean slate per account - no shared or merged data!
+      localStorage.setItem(key, JSON.stringify([]));
+      return [];
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
@@ -105,20 +122,34 @@ export function getLocalContacts(): LocalContact[] {
   } catch (err) {
     console.warn('Erreur lecture contacts locaux:', err);
   }
-  return DEFAULT_SEEDED_CONTACTS;
+  return [];
 }
 
-export function getFavoriteContacts(): LocalContact[] {
-  return getLocalContacts().filter((c) => Boolean(c.isFavorite));
+export function clearAllContactsForAccount(userEmail?: string): void {
+  if (typeof window === 'undefined') return;
+  const key = getStorageKey(userEmail);
+  try {
+    localStorage.setItem(key, JSON.stringify([]));
+    notifyContactsChanged();
+  } catch (err) {
+    console.warn('Erreur effacement contacts:', err);
+  }
+}
+
+export function getFavoriteContacts(userEmail?: string): LocalContact[] {
+  return getLocalContacts(userEmail).filter((c) => Boolean(c.isFavorite));
 }
 
 /**
  * Find a contact in the local carnet de contacts by email address.
  */
-export function findContactByEmail(email: string | undefined | null): LocalContact | undefined {
+export function findContactByEmail(
+  email: string | undefined | null,
+  userEmail?: string
+): LocalContact | undefined {
   if (!email) return undefined;
   const clean = email.toLowerCase().trim();
-  const contacts = getLocalContacts();
+  const contacts = getLocalContacts(userEmail);
   return contacts.find((c) => c.email.toLowerCase().trim() === clean);
 }
 
@@ -129,20 +160,25 @@ export function findContactByEmail(email: string | undefined | null): LocalConta
  */
 export function resolveContactDisplayName(
   email: string | undefined | null,
-  fallbackName?: string | null
+  fallbackName?: string | null,
+  userEmail?: string
 ): string {
   if (!email && !fallbackName) return '';
   const cleanEmail = (email || '').toLowerCase().trim();
-  
+
   if (cleanEmail) {
-    const contact = findContactByEmail(cleanEmail);
+    const contact = findContactByEmail(cleanEmail, userEmail);
     if (contact && contact.name && contact.name.trim()) {
       return contact.name.trim();
     }
   }
 
   const cleanFallback = (fallbackName || '').trim();
-  if (cleanFallback && cleanFallback.toLowerCase() !== 'moi' && cleanFallback.toLowerCase() !== cleanEmail) {
+  if (
+    cleanFallback &&
+    cleanFallback.toLowerCase() !== 'moi' &&
+    cleanFallback.toLowerCase() !== cleanEmail
+  ) {
     return cleanFallback;
   }
 
@@ -153,18 +189,23 @@ export function resolveContactDisplayName(
   return cleanFallback || cleanEmail;
 }
 
-export function isContactFavorite(emailOrId: string): boolean {
+export function isContactFavorite(emailOrId: string, userEmail?: string): boolean {
   if (!emailOrId) return false;
   const target = emailOrId.toLowerCase().trim();
-  const contacts = getLocalContacts();
+  const contacts = getLocalContacts(userEmail);
   const found = contacts.find(
     (c) => c.id === emailOrId || c.email.toLowerCase() === target
   );
   return Boolean(found?.isFavorite);
 }
 
-export function toggleContactFavorite(emailOrId: string, fallbackName?: string): boolean {
-  const contacts = getLocalContacts();
+export function toggleContactFavorite(
+  emailOrId: string,
+  fallbackName?: string,
+  userEmail?: string
+): boolean {
+  const key = getStorageKey(userEmail);
+  const contacts = getLocalContacts(userEmail);
   const target = emailOrId.toLowerCase().trim();
   const idx = contacts.findIndex(
     (c) => c.id === emailOrId || c.email.toLowerCase() === target
@@ -197,15 +238,17 @@ export function toggleContactFavorite(emailOrId: string, fallbackName?: string):
     newStatus = true;
   }
 
-  localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+  localStorage.setItem(key, JSON.stringify(contacts));
   notifyContactsChanged();
   return newStatus;
 }
 
 export function saveLocalContact(
-  contact: Partial<LocalContact> & { name: string; email: string; category: ContactCategory }
+  contact: Partial<LocalContact> & { name: string; email: string; category: ContactCategory },
+  userEmail?: string
 ): LocalContact {
-  const contacts = getLocalContacts();
+  const key = getStorageKey(userEmail);
+  const contacts = getLocalContacts(userEmail);
   const emailClean = contact.email.trim().toLowerCase();
   const now = Date.now();
 
@@ -227,7 +270,7 @@ export function saveLocalContact(
       updatedAt: now,
     };
     contacts[existingIndex] = updated;
-    localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+    localStorage.setItem(key, JSON.stringify(contacts));
     notifyContactsChanged();
     return updated;
   }
@@ -248,30 +291,37 @@ export function saveLocalContact(
   };
 
   contacts.unshift(newContact);
-  localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+  localStorage.setItem(key, JSON.stringify(contacts));
   notifyContactsChanged();
   return newContact;
 }
 
-export function deleteLocalContact(id: string): void {
-  const contacts = getLocalContacts().filter((c) => c.id !== id);
-  localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+export function deleteLocalContact(id: string, userEmail?: string): void {
+  const key = getStorageKey(userEmail);
+  const contacts = getLocalContacts(userEmail).filter((c) => c.id !== id);
+  localStorage.setItem(key, JSON.stringify(contacts));
   notifyContactsChanged();
 }
 
-export function updateContactCategory(id: string, category: ContactCategory): void {
-  const contacts = getLocalContacts();
+export function updateContactCategory(
+  id: string,
+  category: ContactCategory,
+  userEmail?: string
+): void {
+  const key = getStorageKey(userEmail);
+  const contacts = getLocalContacts(userEmail);
   const contact = contacts.find((c) => c.id === id);
   if (contact) {
     contact.category = category;
     contact.updatedAt = Date.now();
-    localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+    localStorage.setItem(key, JSON.stringify(contacts));
     notifyContactsChanged();
   }
 }
 
-export function incrementContactUsage(emailOrId: string): void {
-  const contacts = getLocalContacts();
+export function incrementContactUsage(emailOrId: string, userEmail?: string): void {
+  const key = getStorageKey(userEmail);
+  const contacts = getLocalContacts(userEmail);
   const target = emailOrId.toLowerCase().trim();
   const contact = contacts.find(
     (c) => c.id === emailOrId || c.email.toLowerCase() === target
@@ -279,14 +329,18 @@ export function incrementContactUsage(emailOrId: string): void {
   if (contact) {
     contact.usageCount = (contact.usageCount || 0) + 1;
     contact.updatedAt = Date.now();
-    localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(contacts));
+    localStorage.setItem(key, JSON.stringify(contacts));
     notifyContactsChanged();
   }
 }
 
-export function suggestContacts(input: string, limit = 8): LocalContact[] {
+export function suggestContacts(
+  input: string,
+  limit = 8,
+  userEmail?: string
+): LocalContact[] {
   const cleanInput = input.trim().toLowerCase();
-  const contacts = getLocalContacts();
+  const contacts = getLocalContacts(userEmail);
 
   if (!cleanInput) {
     return [...contacts]
@@ -311,8 +365,12 @@ export function suggestContacts(input: string, limit = 8): LocalContact[] {
       if (!a.isFavorite && b.isFavorite) return 1;
 
       // Exact startsWith
-      const aStarts = a.email.toLowerCase().startsWith(cleanInput) || a.name.toLowerCase().startsWith(cleanInput);
-      const bStarts = b.email.toLowerCase().startsWith(cleanInput) || b.name.toLowerCase().startsWith(cleanInput);
+      const aStarts =
+        a.email.toLowerCase().startsWith(cleanInput) ||
+        a.name.toLowerCase().startsWith(cleanInput);
+      const bStarts =
+        b.email.toLowerCase().startsWith(cleanInput) ||
+        b.name.toLowerCase().startsWith(cleanInput);
       if (aStarts && !bStarts) return -1;
       if (!aStarts && bStarts) return 1;
       return (b.usageCount || 0) - (a.usageCount || 0);
@@ -364,7 +422,8 @@ export function importContactsFromParsedEmails(
   existingCategoryMap?: Record<string, string>,
   currentUserEmail?: string
 ): { added: number; updated: number } {
-  const currentContacts = getLocalContacts();
+  const key = getStorageKey(currentUserEmail);
+  const currentContacts = getLocalContacts(currentUserEmail);
   const mapByEmail = new Map<string, LocalContact>();
   currentContacts.forEach((c) => mapByEmail.set(c.email.toLowerCase(), c));
 
@@ -401,14 +460,18 @@ export function importContactsFromParsedEmails(
             ? 'pro'
             : 'personal';
 
-        const companyFromDomain = !isPersonalDomain && domain.includes('.')
-          ? domain.split('.')[0].toUpperCase()
-          : undefined;
+        const companyFromDomain =
+          !isPersonalDomain && domain.includes('.')
+            ? domain.split('.')[0].toUpperCase()
+            : undefined;
 
         if (mapByEmail.has(fromEmail)) {
           const existing = mapByEmail.get(fromEmail)!;
           existing.usageCount = (existing.usageCount || 0) + 1;
-          if ((!existing.name || existing.name === fromEmail.split('@')[0]) && fromName) {
+          if (
+            (!existing.name || existing.name === fromEmail.split('@')[0]) &&
+            fromName
+          ) {
             existing.name = fromName;
           }
           if (!existing.company && companyFromDomain) {
@@ -448,10 +511,7 @@ export function importContactsFromParsedEmails(
 
     for (const recipient of recipientList) {
       const recEmail = recipient.email.toLowerCase().trim();
-      if (
-        !recEmail ||
-        !recEmail.includes('@')
-      ) {
+      if (!recEmail || !recEmail.includes('@')) {
         continue;
       }
 
@@ -468,14 +528,18 @@ export function importContactsFromParsedEmails(
       ].includes(domain);
 
       const inferredCategory: ContactCategory = !isPersonalDomain ? 'pro' : 'personal';
-      const companyFromDomain = !isPersonalDomain && domain.includes('.')
-        ? domain.split('.')[0].toUpperCase()
-        : undefined;
+      const companyFromDomain =
+        !isPersonalDomain && domain.includes('.')
+          ? domain.split('.')[0].toUpperCase()
+          : undefined;
 
       if (mapByEmail.has(recEmail)) {
         const existing = mapByEmail.get(recEmail)!;
         existing.usageCount = (existing.usageCount || 0) + 1;
-        if ((!existing.name || existing.name === recEmail.split('@')[0]) && recipient.name) {
+        if (
+          (!existing.name || existing.name === recEmail.split('@')[0]) &&
+          recipient.name
+        ) {
           existing.name = recipient.name;
         }
         if (!existing.company && companyFromDomain) {
@@ -508,7 +572,7 @@ export function importContactsFromParsedEmails(
   }
 
   const result = Array.from(mapByEmail.values());
-  localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(result));
+  localStorage.setItem(key, JSON.stringify(result));
   notifyContactsChanged();
   return { added, updated };
 }

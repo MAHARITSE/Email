@@ -1,3 +1,5 @@
+import { getActiveAccountEmail } from './multiAccountService';
+
 export interface EmailSignature {
   id: string;
   name: string;
@@ -16,7 +18,15 @@ export interface EmailSignature {
   updatedAt: number;
 }
 
-const SIGNATURES_STORAGE_KEY = 'gmail_user_signatures_v2';
+const LEGACY_SIGNATURES_KEY = 'gmail_user_signatures_v2';
+
+function getStorageKey(userEmail?: string): string {
+  const activeEmail = (userEmail || getActiveAccountEmail() || '').trim().toLowerCase();
+  if (activeEmail) {
+    return `gmail_signatures_v3_${activeEmail}`;
+  }
+  return 'gmail_signatures_v3_default';
+}
 
 const DEFAULT_SIGNATURES: EmailSignature[] = [
   {
@@ -67,11 +77,23 @@ function notifySignaturesChanged() {
   }
 }
 
-export function getSignatures(): EmailSignature[] {
+export function getSignatures(userEmail?: string): EmailSignature[] {
+  if (typeof window === 'undefined') return DEFAULT_SIGNATURES;
+  const key = getStorageKey(userEmail);
   try {
-    const raw = localStorage.getItem(SIGNATURES_STORAGE_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      localStorage.setItem(SIGNATURES_STORAGE_KEY, JSON.stringify(DEFAULT_SIGNATURES));
+      const legacy = localStorage.getItem(LEGACY_SIGNATURES_KEY);
+      if (legacy) {
+        try {
+          const parsedLegacy = JSON.parse(legacy);
+          if (Array.isArray(parsedLegacy) && parsedLegacy.length > 0) {
+            localStorage.setItem(key, JSON.stringify(parsedLegacy));
+            return parsedLegacy;
+          }
+        } catch {}
+      }
+      localStorage.setItem(key, JSON.stringify(DEFAULT_SIGNATURES));
       return DEFAULT_SIGNATURES;
     }
     const parsed = JSON.parse(raw);
@@ -84,8 +106,8 @@ export function getSignatures(): EmailSignature[] {
   return DEFAULT_SIGNATURES;
 }
 
-export function getDefaultSignature(type: 'new' | 'reply'): EmailSignature | null {
-  const sigs = getSignatures();
+export function getDefaultSignature(type: 'new' | 'reply', userEmail?: string): EmailSignature | null {
+  const sigs = getSignatures(userEmail);
   if (type === 'new') {
     return sigs.find((s) => s.isDefaultNew) || sigs[0] || null;
   } else {
@@ -143,8 +165,12 @@ export function formatSignatureHtml(sig: EmailSignature): string {
   </div>`;
 }
 
-export function saveSignature(signature: Omit<EmailSignature, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): EmailSignature {
-  const list = getSignatures();
+export function saveSignature(
+  signature: Omit<EmailSignature, 'id' | 'createdAt' | 'updatedAt'> & { id?: string },
+  userEmail?: string
+): EmailSignature {
+  const key = getStorageKey(userEmail);
+  const list = getSignatures(userEmail);
   const now = Date.now();
 
   let targetId = signature.id;
@@ -191,13 +217,14 @@ export function saveSignature(signature: Omit<EmailSignature, 'id' | 'createdAt'
     }
   }
 
-  localStorage.setItem(SIGNATURES_STORAGE_KEY, JSON.stringify(updatedList));
+  localStorage.setItem(key, JSON.stringify(updatedList));
   notifySignaturesChanged();
   return fullRecord;
 }
 
-export function deleteSignature(id: string): void {
-  const list = getSignatures().filter((s) => s.id !== id);
-  localStorage.setItem(SIGNATURES_STORAGE_KEY, JSON.stringify(list));
+export function deleteSignature(id: string, userEmail?: string): void {
+  const key = getStorageKey(userEmail);
+  const list = getSignatures(userEmail).filter((s) => s.id !== id);
+  localStorage.setItem(key, JSON.stringify(list));
   notifySignaturesChanged();
 }
