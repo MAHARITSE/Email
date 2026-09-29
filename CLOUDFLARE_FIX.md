@@ -245,7 +245,7 @@ Idem dans `functions/api/_shared.ts`
 
 3. **Environment variables** (Settings > Environment Variables) :
    - **Production + Preview** :
-     - `VITE_GOOGLE_CLIENT_ID` = `578253832851-....apps.googleusercontent.com` (public, var)
+     - `VITE_GOOGLE_CLIENT_ID` = `211708420086-4ip8gkhlccd2nk8e1npv2snr4t1gv2db.apps.googleusercontent.com` (public, var)
      - `GEMINI_API_KEY` = `AIza...` (secret, encrypted, pour Functions)
    - **Optional** :
      - `NODE_VERSION` = `22`
