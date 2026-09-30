@@ -4,6 +4,12 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import {
+  generateGeminiWithFallbackAndRetry,
+  describeGeminiFailure,
+  getGeminiModelStatus,
+  getActiveModel,
+} from './gemini';
 
 dotenv.config();
 
@@ -31,53 +37,6 @@ function getGemini(): GoogleGenAI | null {
     });
   }
   return geminiClient;
-}
-
-/**
- * Resilient Gemini execution helper:
- * - Uses gemini-3.8-flash as primary model
- * - Handles 503 (high demand / unavailable) and 429 (rate limits) with automatic retry and backoff
- * - Falls back to gemini-flash-latest and gemini-3.1-flash-lite if the primary model is busy
- */
-async function generateGeminiWithFallbackAndRetry(
-  ai: GoogleGenAI,
-  contents: string,
-  config?: any
-) {
-  const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
-  let lastError: any = null;
-
-  for (const model of candidateModels) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents,
-          config,
-        });
-        return response;
-      } catch (err: any) {
-        lastError = err;
-        const msg = String(err?.message || err);
-        const isBusyOrTransient =
-          msg.includes('503') ||
-          msg.includes('high demand') ||
-          msg.includes('UNAVAILABLE') ||
-          msg.includes('429') ||
-          msg.includes('RESOURCE_EXHAUSTED');
-
-        if (isBusyOrTransient && attempt === 0) {
-          // Short delay before retrying or switching models
-          await new Promise((resolve) => setTimeout(resolve, 600));
-          continue;
-        }
-        // If second attempt or other error, break out and try next candidate model
-        break;
-      }
-    }
-  }
-
-  throw lastError;
 }
 
 /**
@@ -178,6 +137,8 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+    activeModel: getActiveModel(),
+    models: getGeminiModelStatus(),
   });
 });
 
@@ -262,11 +223,12 @@ ${text}
       return res.json({ improvedText });
     } catch (aiErr: any) {
       console.warn('Gemini improve-email temporairement indisponible, utilisation du texte de secours:', aiErr?.message);
+      const info = describeGeminiFailure(aiErr);
       let fallbackText = text.trim();
       if (action === 'professional' && !fallbackText.startsWith('Bonjour')) {
         fallbackText = `Bonjour,\n\n${fallbackText}\n\nCordialement,`;
       }
-      return res.json({ improvedText: fallbackText, warning: 'Service IA temporairement surchargé' });
+      return res.json({ improvedText: fallbackText, ...info });
     }
   } catch (error: any) {
     console.error('Erreur improve-email:', error);
@@ -364,7 +326,8 @@ Réponds UNIQUEMENT sous forme de JSON valide avec ce schéma exact :
       return res.json(data);
     } catch (aiErr: any) {
       console.warn('Gemini suggest-reply temporairement indisponible, utilisation des réponses types:', aiErr?.message);
-      return res.json({ suggestions: defaultSuggestions });
+      const info = describeGeminiFailure(aiErr);
+      return res.json({ suggestions: defaultSuggestions, ...info });
     }
   } catch (error: any) {
     console.error('Erreur suggest-reply:', error);
@@ -467,7 +430,8 @@ Réponds UNIQUEMENT sous forme de JSON valide :
       return res.json(data);
     } catch (aiErr: any) {
       console.warn('Gemini draft-email temporairement indisponible, utilisation du canevas par défaut:', aiErr?.message);
-      return res.json(defaultDraft);
+      const info = describeGeminiFailure(aiErr);
+      return res.json({ ...defaultDraft, ...info });
     }
   } catch (error: any) {
     console.error('Erreur draft-email:', error);
@@ -537,6 +501,7 @@ Réponds UNIQUEMENT avec un JSON contenant un dictionnaire id -> categorie :
       return res.json({
         classifications: classifyEmailsHeuristic(emails),
         fallback: true,
+        ...describeGeminiFailure(aiErr),
       });
     }
   } catch (error: any) {

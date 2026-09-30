@@ -297,6 +297,76 @@ export async function classifyEmailsWithGemini(
   return fallback;
 }
 
+/**
+ * Résultats de la classification IA mémorisés localement.
+ * Chaque courriel n'est envoyé à Gemini QU'UNE SEULE fois : économie de quota
+ * et de temps (les classifications sont stables dans le temps).
+ */
+const AI_STORAGE_KEY = 'gmail_ai_categories_v1';
+/** Ancienneté maximale d'une classification IA conservée : 30 jours. */
+const AI_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+interface AiCategoryEntry {
+  category: 'pro' | 'personal' | 'sites' | 'other';
+  savedAt: number;
+}
+
+export function loadAiCategories(): Record<string, 'pro' | 'personal' | 'sites' | 'other'> {
+  try {
+    const raw = localStorage.getItem(AI_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, AiCategoryEntry | string>;
+    const now = Date.now();
+    const result: Record<string, 'pro' | 'personal' | 'sites' | 'other'> = {};
+
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value === 'string') {
+        result[id] = value as 'pro' | 'personal' | 'sites' | 'other';
+      } else if (value && typeof value.category === 'string') {
+        if (now - (value.savedAt || 0) < AI_CACHE_MAX_AGE_MS) {
+          result[id] = value.category;
+        }
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export function saveAiCategories(
+  updates: Record<string, 'pro' | 'personal' | 'sites' | 'other'>
+) {
+  try {
+    const current = loadAiCategories();
+    const now = Date.now();
+    const next: Record<string, AiCategoryEntry> = {};
+
+    for (const [id, category] of Object.entries(current)) {
+      next[id] = { category, savedAt: now };
+    }
+    for (const [id, category] of Object.entries(updates)) {
+      next[id] = { category, savedAt: now };
+    }
+
+    const keys = Object.keys(next);
+    // On garde le cache borné pour ne pas saturer localStorage
+    const trimmed = keys.length > 5000
+      ? keys
+          .sort((a, b) => (next[b].savedAt || 0) - (next[a].savedAt || 0))
+          .slice(0, 5000)
+          .reduce<Record<string, AiCategoryEntry>>((acc, k) => {
+            acc[k] = next[k];
+            return acc;
+          }, {})
+      : next;
+
+    localStorage.setItem(AI_STORAGE_KEY, JSON.stringify(trimmed));
+  } catch (err) {
+    console.warn('Could not persist AI categories', err);
+  }
+}
+
 const STORAGE_KEY = 'gmail_email_categories_v1';
 
 export function loadManualOverrides(): Record<string, 'pro' | 'personal' | 'sites' | 'other'> {

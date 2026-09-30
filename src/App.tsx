@@ -23,6 +23,10 @@ import {
   saveDraft,
   batchModifyLabels,
   parseRawMessage,
+  fetchHistoryChanges,
+  emptySystemFolder,
+  clearThreadCache,
+  invalidateThreadCache,
   ComposeOptions,
 } from './services/gmailApi';
 import {
@@ -63,7 +67,46 @@ import {
   classifyEmailsWithGemini,
   loadManualOverrides,
   saveManualOverride,
+  loadAiCategories,
+  saveAiCategories,
 } from './services/emailClassifier';
+
+/**
+ * PERFORMANCE : la boîte n'est plus re-téléchargée en boucle.
+ * - Une requête History (très légère) détecte les changements toutes les 3 minutes.
+ * - Le rechargement complet ne se déclenche QUE si quelque chose a vraiment changé.
+ */
+const AUTO_SYNC_INTERVAL_MS = 3 * 60 * 1000;
+/** Les compteurs de dossiers sont resynchronisés au maximum toutes les 5 minutes. */
+const LABEL_SYNC_THROTTLE_MS = 5 * 60 * 1000;
+/** Intervalle minimum entre deux appels de classification IA. */
+const AI_CLASSIFY_THROTTLE_MS = 60 * 1000;
+
+/**
+ * Compare deux listes de courriels sur les champs réellement affichés.
+ * Évite de re-déclencher (à chaque synchronisation) les effets coûteux :
+ * import de contacts, analyse d'agenda, classification IA, re-rendus...
+ */
+function areEmailListsEquivalent(a: ParsedEmail[], b: ParsedEmail[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (
+      x.id !== y.id ||
+      x.isUnread !== y.isUnread ||
+      x.isStarred !== y.isStarred ||
+      x.labelIds.length !== y.labelIds.length
+    ) {
+      return false;
+    }
+    for (let j = 0; j < x.labelIds.length; j++) {
+      if (x.labelIds[j] !== y.labelIds[j]) return false;
+    }
+  }
+  return true;
+}
 
 export default function App() {
   const { isDark } = useTheme();
@@ -87,9 +130,10 @@ export default function App() {
 
   // Email Category & AI Classification state
   const [selectedCategory, setSelectedCategory] = useState<EmailCategory>('all');
-  const [emailCategories, setEmailCategories] = useState<Record<string, 'pro' | 'personal' | 'sites' | 'other'>>(() =>
-    loadManualOverrides()
-  );
+  const [emailCategories, setEmailCategories] = useState<Record<string, 'pro' | 'personal' | 'sites' | 'other'>>(() => ({
+    ...loadAiCategories(),
+    ...loadManualOverrides(),
+  }));
 
   // Search & Pagination state (50 emails per page)
   const [searchQuery, setSearchQuery] = useState('');
@@ -110,6 +154,15 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isGmailApiDisabled, setIsGmailApiDisabled] = useState(false);
   const initialLoadDoneRef = React.useRef(false);
+
+  // Synchronisation incrémentale / performance
+  const lastHistoryIdRef = React.useRef<string>('');
+  const lastLabelSyncRef = React.useRef<number>(0);
+  const lastSyncAtRef = React.useRef<number>(0);
+  const syncInFlightRef = React.useRef(false);
+  const lastAiClassifyRef = React.useRef<number>(0);
+  /** Vrai tant qu'une modale est ouverte : on suspend la synchro automatique. */
+  const uiBusyRef = React.useRef(false);
 
   const [isTokenExpired, setIsTokenExpired] = useState(false);
 
@@ -160,6 +213,12 @@ export default function App() {
       setToastMessage((current) => (current === msg ? null : current));
     }, 4000);
   };
+
+  // Suspend la synchronisation automatique pendant l'ouverture d'une modale
+  React.useEffect(() => {
+    uiBusyRef.current =
+      isComposeOpen || isContactsOpen || isSignaturesOpen || Boolean(confirmationDialog);
+  }, [isComposeOpen, isContactsOpen, isSignaturesOpen, confirmationDialog]);
 
   // 1. Initialize Auth on Mount
   useEffect(() => {
@@ -233,6 +292,10 @@ export default function App() {
       setAccounts(stored);
       setSelectedEmail(null);
       setEmails([]);
+      // Nouveau compte : le cache de conversations et l'historique sont remis à zéro
+      clearThreadCache();
+      lastHistoryIdRef.current = '';
+      lastLabelSyncRef.current = 0;
       showToast(`Compte actif : ${target.user.email}`);
     }
   };
@@ -249,6 +312,8 @@ export default function App() {
         setCachedUserAndToken(next.user, next.token);
         setSelectedEmail(null);
         setEmails([]);
+        clearThreadCache();
+        lastHistoryIdRef.current = '';
       } else {
         handleSignOut();
       }
@@ -264,21 +329,41 @@ export default function App() {
     setSelectedEmail(null);
     setAccounts([]);
     setNeedsAuth(true);
+    clearThreadCache();
+    lastHistoryIdRef.current = '';
   };
 
   // 3. Load user profile and labels once token is active
-  const loadProfileAndLabels = useCallback(async (activeToken: string) => {
-    try {
-      const [profData, labelsData] = await Promise.all([
-        fetchProfile(activeToken).catch(() => null),
-        fetchLabels(activeToken).catch(() => []),
-      ]);
-      if (profData) setProfile(profData);
-      if (labelsData) setLabels(labelsData);
-    } catch (err) {
-      console.error('Failed to load profile or labels', err);
-    }
-  }, []);
+  const loadProfileAndLabels = useCallback(
+    async (activeToken: string, options?: { force?: boolean; throttleMs?: number }) => {
+      const force = options?.force ?? true;
+      const throttleMs = options?.throttleMs ?? 0;
+
+      // En tâche de fond, on ne re-télécharge pas les compteurs à chaque tic :
+      // c'est l'une des principales causes de ralentissement de l'application.
+      if (!force && throttleMs > 0 && Date.now() - lastLabelSyncRef.current < throttleMs) {
+        return;
+      }
+      lastLabelSyncRef.current = Date.now();
+
+      try {
+        const [profData, labelsData] = await Promise.all([
+          fetchProfile(activeToken).catch(() => null),
+          fetchLabels(activeToken).catch(() => []),
+        ]);
+        if (profData) {
+          setProfile(profData);
+          if (profData.historyId) {
+            lastHistoryIdRef.current = profData.historyId;
+          }
+        }
+        if (labelsData) setLabels(labelsData);
+      } catch (err) {
+        console.error('Failed to load profile or labels', err);
+      }
+    },
+    []
+  );
 
   // 4. Load messages for selected folder/label or search query (50 items per page + cross-page unread retrieval)
   const loadMessages = useCallback(
@@ -288,7 +373,8 @@ export default function App() {
       search: string,
       filter: 'all' | 'unread' | 'starred' = 'all',
       targetPageToken: string = '',
-      silent: boolean = false
+      silent: boolean = false,
+      options?: { useCache?: boolean; changedThreadIds?: Set<string> | null }
     ) => {
       try {
         if (!silent) {
@@ -336,8 +422,16 @@ export default function App() {
           }
         }
 
-        const res = await listMessages(activeToken, params, user?.email || undefined);
-        setEmails(res.emails);
+        const res = await listMessages(
+          activeToken,
+          {
+            ...params,
+            useCache: Boolean(options?.useCache),
+            changedThreadIds: options?.changedThreadIds || null,
+          },
+          user?.email || undefined
+        );
+        setEmails((prev) => (areEmailListsEquivalent(prev, res.emails) ? prev : res.emails));
         setNextPageToken(res.nextPageToken);
         setIsGmailApiDisabled(false);
 
@@ -400,7 +494,9 @@ export default function App() {
     setPageIndex(0);
     setPageTokens(['']);
     setSelectedEmail(null);
-    loadMessages(token, selectedLabelId, activeSearch, statusFilter, '');
+    // Le cache local est utilisé : changer de dossier ne re-télécharge pas
+    // les conversations déjà connues (celles modifiées sont invalidées en amont).
+    loadMessages(token, selectedLabelId, activeSearch, statusFilter, '', false, { useCache: true });
   }, [token, user?.email, selectedLabelId, activeSearch, statusFilter, loadMessages]);
 
   const handleStatusFilterChange = (newFilter: 'all' | 'unread' | 'starred') => {
@@ -426,30 +522,115 @@ export default function App() {
     loadMessages(token, selectedLabelId, activeSearch, statusFilter, targetToken);
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     if (!token) return;
-    loadProfileAndLabels(token);
-    if (selectedLabelId !== 'ATTACHMENTS' && selectedLabelId !== 'AGENDA') {
-      const currentToken = pageTokens[pageIndex] || '';
-      loadMessages(token, selectedLabelId, activeSearch, statusFilter, currentToken);
-    }
+    showToast('Actualisation de la boîte...');
+    await syncMailbox(true);
     showToast('Boîte de réception actualisée');
   };
 
-  // Background auto-polling for incoming messages every 35s
+  /**
+   * Synchronisation intelligente :
+   * 1 requête History (très légère) pour savoir si la boîte a changé.
+   * Le rechargement complet n'a lieu QUE si c'est nécessaire.
+   */
+  const syncMailbox = useCallback(
+    async (force: boolean = false) => {
+      if (!token) return;
+      if (selectedLabelId === 'ATTACHMENTS' || selectedLabelId === 'AGENDA') return;
+      if (syncInFlightRef.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      // Jamais de rechargement pendant qu'une modale est ouverte
+      if (!force && uiBusyRef.current) return;
+
+      syncInFlightRef.current = true;
+      lastSyncAtRef.current = Date.now();
+
+      try {
+        const currentToken = pageTokens[pageIndex] || '';
+
+        if (!force && lastHistoryIdRef.current) {
+          let changes: Awaited<ReturnType<typeof fetchHistoryChanges>> | null = null;
+          try {
+            changes = await fetchHistoryChanges(token, lastHistoryIdRef.current);
+          } catch (err: any) {
+            console.warn('History sync indisponible, synchronisation reportée:', err);
+            const historyMsg = String(err?.message || '');
+            if (
+              /invalid authentication credentials|oauth 2 access token|unauthenticated|token expired|login cookie/i.test(
+                historyMsg
+              )
+            ) {
+              window.dispatchEvent(
+                new CustomEvent('gmail-auth-expired', { detail: { message: historyMsg } })
+              );
+            }
+            return;
+          }
+
+          if (changes.historyId) lastHistoryIdRef.current = changes.historyId;
+
+          if (!changes.expired && !changes.hasChanges) {
+            // Rien n'a bougé : aucun re-téléchargement de la boîte.
+            await loadProfileAndLabels(token, { force: false, throttleMs: LABEL_SYNC_THROTTLE_MS });
+            return;
+          }
+
+          if (changes.changedThreadIds.size > 0) {
+            invalidateThreadCache(changes.changedThreadIds);
+          } else {
+            invalidateThreadCache();
+          }
+
+          await loadMessages(token, selectedLabelId, activeSearch, statusFilter, currentToken, true, {
+            useCache: true,
+            changedThreadIds: changes.changedThreadIds,
+          });
+          await loadProfileAndLabels(token, { force: true });
+          return;
+        }
+
+        // Pas de référence History (1er chargement) ou refresh manuel
+        await loadMessages(token, selectedLabelId, activeSearch, statusFilter, currentToken, !force, {
+          useCache: !force,
+        });
+        await loadProfileAndLabels(token, { force: true });
+      } finally {
+        syncInFlightRef.current = false;
+      }
+    },
+    [
+      token,
+      selectedLabelId,
+      activeSearch,
+      statusFilter,
+      pageIndex,
+      pageTokens,
+      loadMessages,
+      loadProfileAndLabels,
+    ]
+  );
+
+  // Synchronisation de fond toutes les 3 minutes (+ au retour sur l'onglet)
   useEffect(() => {
     if (!token || selectedLabelId === 'ATTACHMENTS' || selectedLabelId === 'AGENDA') return;
 
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible' && !isLoadingEmails) {
-        const currentToken = pageTokens[pageIndex] || '';
-        loadMessages(token, selectedLabelId, activeSearch, statusFilter, currentToken, true);
-        loadProfileAndLabels(token);
-      }
-    }, 35000);
+    const interval = window.setInterval(() => {
+      syncMailbox();
+    }, AUTO_SYNC_INTERVAL_MS);
 
-    return () => clearInterval(interval);
-  }, [token, selectedLabelId, activeSearch, statusFilter, pageIndex, pageTokens, isLoadingEmails, loadMessages, loadProfileAndLabels]);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastSyncAtRef.current > 60000) {
+        syncMailbox();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [token, selectedLabelId, syncMailbox]);
 
   // Live search debounce like Gmail
   useEffect(() => {
@@ -497,16 +678,24 @@ export default function App() {
       setEmailCategories(nextCats);
     }
 
-    // AI Classification in background using Gemini for top unclassified emails only
+    // AI Classification in background using Gemini.
+    // LIMITÉ : un seul appel par minute, uniquement pour les courriels jamais classés
+    // par l'IA (résultats mémorisés) -> évite de brûler le quota Gemini à chaque sync.
+    const aiCats = loadAiCategories();
     const unclassified = emails
-      .filter((e) => !overrides[e.id] && !emailCategories[e.id])
-      .slice(0, 15);
-    if (unclassified.length > 0) {
+      .filter((e) => !overrides[e.id] && !emailCategories[e.id] && !aiCats[e.id])
+      .slice(0, 10);
+
+    if (unclassified.length > 0 && Date.now() - lastAiClassifyRef.current > AI_CLASSIFY_THROTTLE_MS) {
+      lastAiClassifyRef.current = Date.now();
       classifyEmailsWithGemini(unclassified).then((geminiMap) => {
+        const entries = Object.entries(geminiMap);
+        if (entries.length === 0) return;
+        saveAiCategories(geminiMap);
         setEmailCategories((prev) => {
           const updated = { ...prev };
           let changed = false;
-          for (const [id, cat] of Object.entries(geminiMap)) {
+          for (const [id, cat] of entries) {
             if (!overrides[id] && updated[id] !== cat) {
               updated[id] = cat;
               changed = true;
@@ -562,6 +751,8 @@ export default function App() {
     if (!token) return;
 
     const newStarred = !email.isStarred;
+    // Le cache de cette conversation n'est plus valide
+    if (email.threadId) invalidateThreadCache([email.threadId]);
     // Optimistic update
     setEmails((prev) =>
       prev.map((m) =>
@@ -611,6 +802,7 @@ export default function App() {
     if (!token) return;
 
     const newUnread = !email.isUnread;
+    if (email.threadId) invalidateThreadCache([email.threadId]);
     setEmails((prev) =>
       prev.map((m) =>
         m.id === email.id ? { ...m, isUnread: newUnread } : m
@@ -677,6 +869,7 @@ export default function App() {
   const handleBatchMarkRead = async (selectedList: ParsedEmail[], isRead: boolean) => {
     if (!token || selectedList.length === 0) return;
     const ids = selectedList.map((m) => m.id);
+    invalidateThreadCache(selectedList.map((m) => m.threadId).filter(Boolean) as string[]);
 
     setEmails((prev) =>
       prev.map((m) => (ids.includes(m.id) ? { ...m, isUnread: !isRead } : m))
@@ -723,6 +916,7 @@ export default function App() {
     setSelectedEmail(openedEmail);
     // If unread, mark as read automatically & update inbox unread count directly
     if (email.isUnread) {
+      if (email.threadId) invalidateThreadCache([email.threadId]);
       setEmails((prev) =>
         prev.map((m) => (m.id === email.id ? { ...m, isUnread: false } : m))
       );
@@ -797,6 +991,7 @@ export default function App() {
             await trashMessage(token, email.id);
             showToast('Conversation déplacée dans la corbeille');
           }
+          if (email.threadId) invalidateThreadCache([email.threadId]);
           setEmails((prev) => prev.filter((m) => m.id !== email.id));
           if (selectedEmail?.id === email.id) {
             setSelectedEmail(null);
@@ -867,6 +1062,7 @@ export default function App() {
             showToast(`${selectedList.length} conversation(s) déplacée(s) dans la corbeille`);
           }
           const idSet = new Set(ids);
+          invalidateThreadCache(selectedList.map((m) => m.threadId).filter(Boolean) as string[]);
           setEmails((prev) => prev.filter((m) => !idSet.has(m.id)));
           if (selectedEmail && idSet.has(selectedEmail.id)) {
             setSelectedEmail(null);
@@ -915,18 +1111,20 @@ export default function App() {
 
   // EMPTY ENTIRE TRASH OPERATION
   const handleEmptyTrash = () => {
-    if (emails.length === 0) return;
+    // On se base sur le compteur du dossier (et pas seulement sur la page affichée)
+    // pour pouvoir vider la corbeille même si la liste s'est affichée vide.
+    const total = Math.max(emails.length, trashTotal);
+    if (total === 0) return;
     setConfirmationDialog({
       isOpen: true,
       title: 'Vider la corbeille',
-      message: `Êtes-vous sûr de vouloir vider l'ensemble des ${emails.length} message(s) de la corbeille ? Tous les messages seront supprimés DÉFINITIVEMENT. Cette action est irréversible.`,
+      message: `Êtes-vous sûr de vouloir vider l'ensemble des ${total} message(s) de la corbeille ? Tous les messages seront supprimés DÉFINITIVEMENT. Cette action est irréversible.`,
       confirmLabel: 'Vider la corbeille définitivement',
       confirmStyle: 'danger',
       onConfirm: async () => {
         if (!token) return;
         try {
-          const ids = emails.map((e) => e.id);
-          await batchDeleteMessages(token, ids);
+          const deleted = await emptySystemFolder(token, 'TRASH');
           setEmails([]);
           setSelectedEmail(null);
           setLabels((prevLabels) =>
@@ -936,8 +1134,8 @@ export default function App() {
                 : lbl
             )
           );
-          showToast('Corbeille vidée avec succès');
-          loadProfileAndLabels(token);
+          showToast(`Corbeille vidée : ${deleted} message(s) supprimé(s) définitivement`);
+          await loadProfileAndLabels(token, { force: true });
         } catch (err: any) {
           showToast(err?.message || 'Échec du vidage de la corbeille');
           handleRefresh();
@@ -948,18 +1146,18 @@ export default function App() {
 
   // EMPTY ENTIRE SPAM OPERATION
   const handleEmptySpam = () => {
-    if (emails.length === 0) return;
+    const total = Math.max(emails.length, spamTotal);
+    if (total === 0) return;
     setConfirmationDialog({
       isOpen: true,
       title: 'Supprimer tous les spams',
-      message: `Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT l'ensemble des ${emails.length} message(s) de spam ? Cette action est irréversible.`,
+      message: `Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT l'ensemble des ${total} message(s) de spam ? Cette action est irréversible.`,
       confirmLabel: 'Supprimer tous les spams définitivement',
       confirmStyle: 'danger',
       onConfirm: async () => {
         if (!token) return;
         try {
-          const ids = emails.map((e) => e.id);
-          await batchDeleteMessages(token, ids);
+          const deleted = await emptySystemFolder(token, 'SPAM');
           setEmails([]);
           setSelectedEmail(null);
           setLabels((prevLabels) =>
@@ -969,8 +1167,8 @@ export default function App() {
                 : lbl
             )
           );
-          showToast('Dossier Spam vidé avec succès');
-          loadProfileAndLabels(token);
+          showToast(`Spam vidé : ${deleted} message(s) supprimé(s) définitivement`);
+          await loadProfileAndLabels(token, { force: true });
         } catch (err: any) {
           showToast(err?.message || 'Échec de la suppression des spams');
           handleRefresh();
@@ -1109,6 +1307,12 @@ export default function App() {
   const calculatedUnread = emails.filter((m) => m.isUnread).length;
   const unreadCount = inboxLabel?.threadsUnread ?? inboxLabel?.messagesUnread ?? (calculatedUnread > 0 ? calculatedUnread : 0);
   const currentUserEmail = profile?.emailAddress || user?.email || 'me';
+
+  // Compteurs réels des dossiers Corbeille / Spam (source de vérité = compteur Gmail)
+  const trashLabel = labels.find((l) => l.id === 'TRASH');
+  const spamLabel = labels.find((l) => l.id === 'SPAM');
+  const trashTotal = Math.max(0, trashLabel?.threadsTotal ?? trashLabel?.messagesTotal ?? 0);
+  const spamTotal = Math.max(0, spamLabel?.threadsTotal ?? spamLabel?.messagesTotal ?? 0);
 
   // If user is not authenticated or token is not yet ready, render official sign-in prompt
   if (needsAuth || !token) {
@@ -1370,6 +1574,8 @@ export default function App() {
               onStatusFilterChange={handleStatusFilterChange}
               onEmptyTrash={handleEmptyTrash}
               onEmptySpam={handleEmptySpam}
+              trashTotal={trashTotal}
+              spamTotal={spamTotal}
             />
           )}
         </main>

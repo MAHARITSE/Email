@@ -176,6 +176,9 @@ export async function improveEmailText(
   }
 
   const data = await res.json();
+  if (data?.quotaExceeded) {
+    throw new Error(data.warning || 'Quota IA quotidien atteint, réessayez plus tard.');
+  }
   return data.improvedText || text;
 }
 
@@ -200,6 +203,11 @@ export async function getSmartReplySuggestions(
   }
 
   const data = await res.json();
+  if (data?.quotaExceeded) {
+    // Tous les modèles Gemini ont atteint leur quota : on le signale clairement
+    // plutôt que d'afficher des réponses types en les faisant passer pour de l'IA.
+    throw new Error(data.warning || 'Quota IA quotidien atteint, réessayez plus tard.');
+  }
   return data.suggestions || [];
 }
 
@@ -226,6 +234,9 @@ export async function draftEmailWithAi(
   }
 
   const data = await res.json();
+  if (data?.quotaExceeded) {
+    throw new Error(data.warning || 'Quota IA quotidien atteint, réessayez plus tard.');
+  }
   return {
     subject: data.subject || 'Nouveau message',
     body: data.body || (typeof optsOrPrompt === 'string' ? optsOrPrompt : payload.prompt),
